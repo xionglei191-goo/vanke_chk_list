@@ -141,12 +141,33 @@ PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/run_re
 PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/analyze_unresolved_review_sources.py
 ```
 
-脚本会生成本地 ignored 文件 `auto_review_system/data/analysis/unresolved_review_source_manifest.csv`。补充原始方案后，在该 CSV 的 `user_supplied_path` 填入文件路径，再按同一路线重跑：
+### 无法判断来源分析与补件闭环
+
+`analyze_unresolved_review_sources.py` 用来回答“哪些审核意见还没有真正对照到原始方案”。它不会调用大模型，只读取 `审核意见.xlsx`、本地 `原始材料/方案评审/` 和已有解析规则，输出三份本地 ignored 文件：
+
+- `unresolved_review_sources.md`：给人看的缺口报告，按项目列出无法判断数量、当前匹配文件、匹配质量和需要补充的资料。
+- `unresolved_review_sources.json`：完整结构化明细，包含每条意见的行号、意见原文、维度、工程类别、缺口原因和应补资料。
+- `unresolved_review_source_manifest.csv`：补件工作表，给每个项目预留 `user_supplied_path` 和 `notes`。
+
+当前基线结果是：`432` 条原子审核意见中，`266` 条仍为“无法判断”；其中 `207` 条未匹配到本地原始材料文件，`59` 条有相近文件但没有定位到触发片段。后者可能是文件名相近但实际错配，也可能是专家意见对应旧版方案、报价白单或附件片段。
+
+补充原始方案后，在 `unresolved_review_source_manifest.csv` 的 `user_supplied_path` 填入文件路径。路径支持三种写法：
+
+- 相对 `原始材料/方案评审/` 的文件名，例如 `某项目施工方案.xlsx`。
+- 相对项目根目录的路径，例如 `原始材料/补充方案/某项目施工方案.xlsx`。
+- 绝对路径，例如 `/home/xionglei/.../某项目施工方案.xlsx`。
+
+`source_manifest` 也支持 JSON：可以是 `{项目名称: 文件路径}`，也可以是包含 `project_name`、`user_supplied_path` 字段的数组。CSV 或 JSON 中不存在的文件会被忽略，所以可以分批补资料、分批重跑。
+
+补件后的复跑顺序：
 
 ```bash
 PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/analyze_unresolved_review_sources.py --source-manifest auto_review_system/data/analysis/unresolved_review_source_manifest.csv
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_review_experience_kb.py --source-manifest auto_review_system/data/analysis/unresolved_review_source_manifest.csv --dry-run
 PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_review_experience_kb.py --source-manifest auto_review_system/data/analysis/unresolved_review_source_manifest.csv --apply
 ```
+
+复跑后先看 `unresolved_review_sources.md` 中“无法判断”数量是否下降，再看 `deep_alignment_benchmark_report.md` 和 `review_experience_cards.json` 是否新增了 `部分补齐/仍缺失/已补齐` 的证据对齐结果。确认无误后再执行 `--apply` 写入 SQLite、JSON 备份和 Chroma 向量库。
 
 ## WBS 本地补标
 
