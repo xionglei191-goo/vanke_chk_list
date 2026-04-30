@@ -32,6 +32,7 @@ Thumbs.db
 # IDEs
 .idea/
 .vscode/
+.agents/
 
 # Logs
 logs/
@@ -58,6 +59,8 @@ output.txt
 result.md
 *.pid
 get-pip.py
+req_filter.txt
+legacy_tools/
 temp_debug_json/
 auto_review_system/temp_debug_json/
 auto_review_system/output.txt

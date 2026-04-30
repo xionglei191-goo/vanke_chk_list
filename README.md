@@ -122,4 +122,4 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=auto_review_system .venv/bin/python -m comp
 PYTHONPATH=auto_review_system:auto_review_system/scripts .venv/bin/python tests/test_rag.py
 ```
 
-项目当前采用标准脚本测试，不依赖 pytest。`tests/` 下仍有部分历史探索脚本，优先以上述三条作为交接验证入口。
+项目当前采用标准脚本测试，不依赖 pytest；`tests/` 仅保留可重复运行的核心 RAG/路径/缓存/WBS 验证脚本。
