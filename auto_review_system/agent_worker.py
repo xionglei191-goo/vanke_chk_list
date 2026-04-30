@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rag_engine.queue_manager import init_db, get_pending_task, update_task_status, get_task_status
 from rag_engine.vector_store import retrieve_rules
 from auditors.multi_agent import run_linear_pipeline
+from auditors.repair_scheme_engine import run_repair_pipeline
 from utils.exporter import markdown_to_docx
 from auditors.engineering_auditor import analyze_vision_wbs
 
@@ -19,6 +20,32 @@ from parsers.word_parser import parse_word_doc_structured, parse_word_as_cost_co
 from parsers.pdf_parser import parse_pdf_structured, parse_pdf_as_cost_context
 from parsers.excel_parser import parse_excel_bill, parse_excel_as_scheme_chunks
 from utils.paths import RESULTS_DIR, resolve_runtime_path
+
+
+def _audit_engine():
+    return os.getenv("AUDIT_ENGINE", "v2_repair").strip().lower()
+
+
+def _cost_review_mode():
+    return os.getenv("COST_REVIEW_MODE", "explicit").strip().lower()
+
+
+def _is_cost_like_file(file_path):
+    name = os.path.basename(str(file_path or ""))
+    if "施工方案" in name or "工程方案" in name:
+        return False
+    return any(keyword in name for keyword in ("报价", "清单", "白单", "预算", "结算"))
+
+
+def _should_extract_cost_context(file_path, file_type):
+    if file_type == "cost":
+        return True
+    mode = _cost_review_mode()
+    if mode == "off":
+        return False
+    if mode == "explicit":
+        return _is_cost_like_file(file_path)
+    return file_type == "hybrid" or _is_cost_like_file(file_path)
 
 def main_loop():
     logger = logging.getLogger("agent_worker")
@@ -78,7 +105,7 @@ def main_loop():
                     elif ext == 'docx': ch = parse_word_doc_structured(file_path)
                     elif ext == 'pdf': ch = parse_pdf_structured(file_path)
                     
-                if file_type == "cost" or file_type == "hybrid":
+                if _should_extract_cost_context(file_path, file_type):
                     if ext == 'xlsx': cost_text = str(parse_excel_bill(file_path))
                     elif ext == 'docx': cost_text = str(parse_word_as_cost_context(file_path))
                     elif ext == 'pdf': cost_text = str(parse_pdf_as_cost_context(file_path))
@@ -93,8 +120,11 @@ def main_loop():
                         while status == 'PAUSED': 
                             time.sleep(3)
                             status = get_task_status(task_id)
-                        time.sleep(1.5) # API限流保护
-                        rules = retrieve_rules(c['text'], n_results=5)
+                        if _audit_engine() == "v2_repair":
+                            rules = ""
+                        else:
+                            time.sleep(1.5) # API限流保护
+                            rules = retrieve_rules(c['text'], n_results=5)
                         c['rules'] = rules
                         chunks_ready_for_agents.append(c)
             
@@ -103,11 +133,20 @@ def main_loop():
                 logger.info(f"⛔ 任务 {task_id} 在切片阶段被用户叫停。")
                 continue
             
-            logger.info(f"切片完成，进入 13-Agent 审查... (共 {len(chunks_ready_for_agents)} 切片)")
+            logger.info(f"切片完成，进入审核引擎({_audit_engine()})... (共 {len(chunks_ready_for_agents)} 切片)")
             def progress(msg, pct):
                 logger.info(msg)
-                
-            grouped_reports = run_linear_pipeline(chunks_ready_for_agents, project_name, global_cost_context, progress_callback=progress, status_check_callback=check_db_cb)
+
+            if _audit_engine() == "v2_repair":
+                grouped_reports = run_repair_pipeline(
+                    chunks_ready_for_agents,
+                    project_name,
+                    global_cost_context,
+                    progress_callback=progress,
+                    status_check_callback=check_db_cb,
+                )
+            else:
+                grouped_reports = run_linear_pipeline(chunks_ready_for_agents, project_name, global_cost_context, progress_callback=progress, status_check_callback=check_db_cb)
             
             if global_vision_reports:
                 grouped_reports["全局视觉审查"] = global_vision_reports

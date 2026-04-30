@@ -17,6 +17,9 @@ KB_FILE_PATH = os.path.join(BASE_DIR, "data", "knowledge_base.json")
 COLLECTION_NAME = "vanke_standards_collection"
 RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "neighbor").strip().lower()
 METADATA_FULL_TEXT_LIMIT = int(os.getenv("CHROMA_FULL_TEXT_METADATA_LIMIT", "2000"))
+INCLUDE_EXPERIENCE_IN_STANDARD_RAG = os.getenv(
+    "INCLUDE_EXPERIENCE_IN_STANDARD_RAG", "false"
+).strip().lower() in ("1", "true", "yes")
 REQUIRED_METADATA_KEYS = {
     "category",
     "level",
@@ -393,6 +396,8 @@ def retrieve_rules(query, wbs_code=None, lifecycle="施工", n_results=2):
                     {"lifecycle_phase": {"$in": [lifecycle, "通用"]}}
                 ]
             }
+            if not INCLUDE_EXPERIENCE_IN_STANDARD_RAG:
+                where_clause["$and"].append({"index_source": {"$ne": "review_experience"}})
             if wbs_code and wbs_code != "通用":
                 where_clause["$and"].append({"wbs_code": {"$in": valid_wbs_list}})
 
@@ -434,6 +439,7 @@ def retrieve_rules(query, wbs_code=None, lifecycle="施工", n_results=2):
             if score <= 0.5: continue
             meta = BM25_METAS[idx]
             if meta['lifecycle_phase'] not in [lifecycle, "通用"]: continue
+            if not INCLUDE_EXPERIENCE_IN_STANDARD_RAG and meta.get("index_source") == "review_experience": continue
             if wbs_code and wbs_code != "通用" and meta['wbs_code'] not in valid_wbs_list: continue
             scored_docs.append((score, meta))
 

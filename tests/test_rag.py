@@ -20,7 +20,16 @@ from auditors.multi_agent import _selected_scheme_agents, local_triage_chunk
 from llm.cache import build_cache_key, get_cached_text, store_cached_text
 from llm.client import _parse_streaming_response, _to_anthropic_payload
 from rag_engine.kb_quality import assess_rule_quality
+from rag_engine.review_experience import (
+    build_methodology,
+    classify_dimension,
+    classify_professional_attributions,
+    classify_problem_patterns,
+    opinion_row_to_card,
+    split_opinion_items,
+)
 from rag_engine.wbs_classifier import classify_wbs
+from auditors.repair_scheme_engine import run_repair_pipeline
 from utils.cost_controls import rag_rerank_mode, triage_mode
 from utils.paths import app_relative_path, resolve_runtime_path
 from build_tree_index import (
@@ -277,6 +286,7 @@ def run_tests():
     anthropic_payload = _to_anthropic_payload({
         "model": "qwen3.5-plus",
         "max_tokens": 256,
+        "thinking": {"type": "enabled", "budget_tokens": 512},
         "messages": [
             {"role": "system", "content": "系统提示"},
             {"role": "user", "content": "用户问题"},
@@ -284,6 +294,7 @@ def run_tests():
     })
     assert anthropic_payload["system"] == "系统提示"
     assert anthropic_payload["messages"] == [{"role": "user", "content": "用户问题"}]
+    assert anthropic_payload["thinking"] == {"type": "enabled", "budget_tokens": 512}
     anthropic_text = _extract_llm_content({
         "content": [
             {"type": "thinking", "thinking": "内部推理"},
@@ -470,6 +481,94 @@ def run_tests():
     assert not useful["critical"]
     assert useful["score"] >= 80
     print("✅ 知识库质量本地审计测试通过！\n")
+
+    # 测试15：历史审核意见应拆成可学习的原子经验卡
+    print("🟢 测试 15：零星工程审核意见结构化")
+    items = split_opinion_items("1、EPDM胶水比、固化时间、基层验收要求未明确；2、水沟与EPDM交接部位需重点明确")
+    assert items == ["EPDM胶水比、固化时间、基层验收要求未明确", "水沟与EPDM交接部位需重点明确"]
+    assert classify_dimension(items[0]) == "描述完整性"
+    patterns = classify_problem_patterns(items[0])
+    assert patterns[0]["code"] == "missing_parameter"
+    professional = classify_professional_attributions(items[0])
+    assert professional[0]["code"] == "material_system_parameters"
+    card = opinion_row_to_card({
+        "project_name": "广州幸福誉花园J9-J14前游乐场塑胶地面翻新工程施工方案",
+        "engineer": "何文健",
+        "row_index": 5,
+        "item_index": 1,
+        "opinion": items[0],
+        "project_type": "施工方案",
+        "file_type": "xlsx",
+        "matched_file": "sample.xlsx",
+        "work_category": "地坪/EPDM/环氧",
+        "dimension": "描述完整性",
+        "evidence_type": "专家经验",
+        "evidence_ref": "历史审核经验：零星工程专家意见",
+        "is_scheme_related": True,
+    })
+    assert card["dimension"] == "描述完整性"
+    assert "EPDM" in card["trigger_keywords"]
+    assert card["extension_rules"]
+    assert card["problem_pattern"] == "missing_parameter"
+    assert card["professional_attribution"] == "material_system_parameters"
+    assert card["engineer_question"]
+    assert "指导施工" in card["review_intents"]
+    assert card["generalization_rule"]
+    methodology = build_methodology([{
+        "project_name": card["source_project"],
+        "opinion": card["source_opinion"],
+        "work_category": card["work_category"],
+        "dimension": card["dimension"],
+        "problem_pattern": card["problem_pattern"],
+        "review_intents": card["review_intents"],
+        "root_cause": card["root_cause"],
+        "generalization_rule": card["generalization_rule"],
+    }], [card])
+    assert methodology["problem_patterns"][0]["code"] == "missing_parameter"
+    print("✅ 零星工程审核意见结构化测试通过！\n")
+
+    # 测试16：v2 repair 引擎应围绕分项工程输出可修改意见
+    print("🟢 测试 16：v2 零星工程审核引擎基准")
+    old_experience = os.environ.get("REVIEW_EXPERIENCE_ENABLED")
+    old_ai = os.environ.get("REPAIR_AI_REVIEW_ENABLED")
+    os.environ["REVIEW_EXPERIENCE_ENABLED"] = "false"
+    os.environ["REPAIR_AI_REVIEW_ENABLED"] = "false"
+    try:
+        reports = run_repair_pipeline([
+            {
+                "heading": "施工方案",
+                "text": (
+                    "施工范围 | 原有地面塑胶EPDM地垫拆除，新EPDM地垫铺设，水沟维修，石凳翻新。\n"
+                    "施工工序 | EPDM底层橡胶颗粒铺设，面层EPDM颗粒铺设，固化养护。"
+                ),
+            },
+            {
+                "heading": "宿舍改造",
+                "text": "施工范围 | 卫生间轻质砖隔墙砌筑，墙面抹灰，混凝土结构隔层施工。",
+            },
+            {
+                "heading": "御金沙改造",
+                "text": (
+                    "施工范围 | 户外楼梯防腐木地板拆除及塑木地板安装。"
+                    "电梯地板更换为大理石铺贴，钢化玻璃更换，D2活动室油漆1底1面。"
+                ),
+            },
+        ], "零星工程样例")
+        flat = "\n".join(r["result"] for reps in reports.values() for r in reps)
+        for keyword in ["EPDM", "胶水配比", "水沟", "反坎", "植筋", "角铁", "防护剂", "3C", "油漆"]:
+            assert keyword in flat
+        assert "安全文明施工费" not in flat
+        assert "品牌违约" not in flat
+    finally:
+        if old_experience is None:
+            os.environ.pop("REVIEW_EXPERIENCE_ENABLED", None)
+        else:
+            os.environ["REVIEW_EXPERIENCE_ENABLED"] = old_experience
+        if old_ai is None:
+            os.environ.pop("REPAIR_AI_REVIEW_ENABLED", None)
+        else:
+            os.environ["REPAIR_AI_REVIEW_ENABLED"] = old_ai
+    print("✅ v2 零星工程审核引擎基准测试通过！\n")
 
 if __name__ == "__main__":
     run_tests()

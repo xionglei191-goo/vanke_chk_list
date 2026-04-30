@@ -1,6 +1,6 @@
 # 万科工程方案自动审核系统
 
-这是一个 Streamlit + SQLite 队列 + RAG + Multi-Agent 的工程方案/报价清单审核系统。默认配置已经按“均衡省钱”模式优化：本地完成切片过滤、RAG 重排、WBS 补标和 Agent 路由，只把大模型调用留给最终审核结论。
+这是一个 Streamlit + SQLite 队列 + RAG + 零星工程审核引擎的工程方案/报价清单审核系统。默认配置已经按“均衡省钱”模式优化：本地完成切片过滤、RAG 重排、WBS 补标和经验规则匹配，只把大模型调用留给真正需要生成综合结论的步骤。
 
 ## 启动
 
@@ -13,6 +13,17 @@ cd auto_review_system
 - Streamlit 前台：上传资料、查看任务、人工复核导出 Word。
 - Worker：消费 `data/audit_queue.db` 中的任务。
 - Vector API：提供知识库检索接口。
+
+## 零星工程 v2 审核
+
+默认审核引擎为 `AUDIT_ENGINE=v2_repair`，重点面向劳务班组长编写的零星维修、改造、翻新方案。它不按“大而全”的安全/合同/造价 Agent 抢主导，而是围绕四个核心维度输出可直接修改的意见：
+
+- 描述完整性：材料、参数、基层条件、验收指标是否写到可施工、可计价、可复核。
+- 工艺合理性：材料和做法是否适合现场场景，是否有明显经验性风险。
+- 分项拆分：施工动作、部位、报价/白单口径是否应拆开描述。
+- 逻辑自洽：工序顺序、参数搭配、方案与清单是否互相矛盾。
+
+结果字段包含 `dimension`、`work_item`、`finding`、`reason`、`evidence_type`、`evidence_ref`、`recommendation`、`confidence`，报告按分项工程组织，而不是按泛化 Agent 组织。
 
 ## 目录说明
 
@@ -42,13 +53,27 @@ LLM_FAILURE_CACHE_TTL_SECONDS=600
 LLM_MAX_RETRIES=2
 RAG_RERANK_MODE=local
 TRIAGE_MODE=local
+AUDIT_ENGINE=v2_repair
+REVIEW_EXPERIENCE_ENABLED=true
+COST_REVIEW_MODE=explicit
+REPAIR_AI_REVIEW_ENABLED=true
+REPAIR_TOOL_QUERY_LIMIT=4
+REPAIR_CROSS_PROJECT_EXPERIENCE=false
+REPAIR_EXPERIENCE_MATCH_LIMIT=8
+INCLUDE_EXPERIENCE_IN_STANDARD_RAG=false
+LLM_THINKING_ENABLED=true
+LLM_THINKING_BUDGET_TOKENS=1024
+LLM_REASONING_EFFORT=medium
 ```
 
 说明：
 - `balanced` 默认关闭 LLM 哨兵和 LLM RAG reranker。
 - 同一 prompt 的成功响应会缓存 30 天。
 - 模型异常响应短缓存 10 分钟，避免超时期间反复扣费。
-- 方案 Agent 默认启发式路由，通常只跑 2-5 个相关 Agent。
+- v2 零星工程引擎默认本地匹配历史经验、主动查询规范片段，然后只做一次 AI 归因泛化判断。
+- `COST_REVIEW_MODE=explicit` 表示只有明确上传报价/清单或方案内出现清单交叉点时，才触发方案清单一致性检查。
+- `REPAIR_CROSS_PROJECT_EXPERIENCE=false` 避免不同项目经验互相误挂；稳定后可按需打开。
+- `LLM_THINKING_ENABLED=true` 会向支持的模型传递 thinking/reasoning 参数；最终报告不会输出思维链。
 
 如果需要恢复深度审查，可临时设置：
 
@@ -57,6 +82,7 @@ AUDIT_COST_PROFILE=quality
 RAG_RERANK_MODE=llm
 TRIAGE_MODE=llm
 AGENT_ROUTING_ENABLED=false
+AUDIT_ENGINE=legacy
 ```
 
 ## 数据目录
@@ -67,9 +93,34 @@ AGENT_ROUTING_ENABLED=false
 - `data/knowledge_base.db`：知识库主库。
 - `data/knowledge_base.json`：知识库 JSON 备份。
 - `data/llm_cache.db`：大模型响应缓存与调用统计。
+- `data/analysis/`：本地原始材料分析报告、经验卡和基准案例，默认被 Git 忽略。
 - `vector_db_storage/`：ChromaDB 向量库。
 
 历史队列中的绝对路径和旧相对路径仍会被兼容解析。
+
+## 原始材料经验库
+
+系统已支持从 `原始材料/审核意见.xlsx` 和对应方案样本中整理“人类审核方法论”，并将审核意见拆成结构化经验卡。原始业务材料和完整明细不提交 GitHub，生成物保存在本地 ignored 目录：
+
+- `auto_review_system/data/analysis/raw_material_review_report.md`
+- `auto_review_system/data/analysis/review_experience_cards.json`
+- `auto_review_system/data/analysis/review_benchmark_cases.json`
+- `auto_review_system/data/analysis/review_methodology.json`
+- `auto_review_system/data/analysis/review_deep_attribution_cases.json`
+
+先 dry-run 查看拆解数量和维度分布：
+
+```bash
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_review_experience_kb.py --dry-run
+```
+
+确认后写入知识库：
+
+```bash
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_review_experience_kb.py --apply
+```
+
+该脚本会停用旧的“城市公司检查结果”整表规则，重新写入逐条 `review_experience` 经验规则，并同步 SQLite、JSON 备份和 Chroma 向量库。经验卡会保留专业归因、工程师追问、应补资料、泛化规则以及从对应方案/白单中抽取到的原文证据片段。
 
 ## WBS 本地补标
 

@@ -166,6 +166,9 @@ def _to_anthropic_payload(payload):
     }
     if system_parts:
         anthropic_payload["system"] = "\n\n".join(system_parts)
+    for key in ("thinking", "temperature", "top_p", "top_k", "stop_sequences"):
+        if key in payload:
+            anthropic_payload[key] = payload[key]
     return anthropic_payload
 
 

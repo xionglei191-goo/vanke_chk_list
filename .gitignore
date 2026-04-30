@@ -42,6 +42,7 @@ auto_review_system/logs/
 
 # Data and Storage
 auto_review_system/data/results/
+auto_review_system/data/analysis/
 auto_review_system/data/pageindex_ocr_cache/
 auto_review_system/data/pageindex_trees/
 auto_review_system/data/knowledge_base*.json

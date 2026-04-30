@@ -108,14 +108,50 @@ def parse_excel_as_scheme_chunks(excel_path):
         
     chunks = []
     
+    section_aliases = {
+        "施工范围": ("施工范围", "修缮事项", "工程范围"),
+        "施工准备": ("施工准备", "人员准备", "设备与材料准备"),
+        "施工工序": ("施工工序", "施工流程", "施工方法", "工艺流程"),
+        "验收项": ("验收主控项", "验收标准", "质量标准", "验收要求"),
+        "工期": ("计划开工", "总工期", "施工进度", "进度计划"),
+        "界面划分": ("合同施工界面", "界面划分", "移交状态"),
+        "保修": ("保修", "保修年限", "保修期限"),
+    }
+
+    def detect_section(row_text):
+        for section_name, aliases in section_aliases.items():
+            if any(alias in row_text for alias in aliases):
+                return section_name
+        return ""
+
     for sheet_name in wb.sheetnames:
         sheet = wb[sheet_name]
         text_blocks = []
+        semantic_sections = []
+        current_section = None
         for row_idx, row in enumerate(sheet.iter_rows(values_only=True), 1):
             # 将该行有效单元格拼接
             row_text = " | ".join([str(v) for v in row if v is not None and str(v).strip()])
             if row_text:
-                text_blocks.append(f"[第{row_idx}行]: {row_text}")
+                line = f"[第{row_idx}行]: {row_text}"
+                text_blocks.append(line)
+                section_name = detect_section(row_text)
+                if section_name:
+                    if current_section and current_section["text"]:
+                        semantic_sections.append(current_section)
+                    current_section = {
+                        "heading": f"{sheet_name} - {section_name}",
+                        "text": line,
+                    }
+                elif current_section:
+                    current_section["text"] += "\n" + line
+
+        if current_section and current_section["text"]:
+            semantic_sections.append(current_section)
+
+        if semantic_sections and not any("成本测算审核要点" in block for block in text_blocks[:3]):
+            chunks.extend(semantic_sections)
+            continue
         
         # 将整个 Sheet 的文本合并为一个 chunk，如果过大可以截断，此处为了全链路扫描采用合并策略
         if text_blocks:
