@@ -37,6 +37,7 @@ from auditors.repair_scheme_engine import (
     _ai_call_budget,
     _ai_review_mode,
     _complexity_score,
+    _dedupe_issues,
     _experience_issues_from_cards,
     run_repair_pipeline,
 )
@@ -606,6 +607,28 @@ def run_tests():
         {"name": "暂未映射检查点", "status": "未覆盖", "note": "测试用。"}
     ]
     assert not _experience_issues_from_cards([unmapped_cross_card])
+    cost_cross_card = dict(generic_cross_card)
+    cost_cross_card["source_project"] = "历史项目报价清单"
+    cost_cross_card["source_opinion"] = "工程描述过于粗糙，检查-安装-拆除需细化。"
+    assert not _experience_issues_from_cards([cost_cross_card])
+
+    duplicate_local = {
+        "work_item": "装修翻新",
+        "dimension": "描述完整性",
+        "finding": "石凳存在大倒角，需明确在倒角下方粘贴美纹纸收口",
+        "reason": "",
+        "recommendation": "石凳翻新遇大倒角部位时，应在倒角下方粘贴美纹纸控制边界。",
+        "checkpoint_assessments": [{"name": "倒角收口", "status": "未覆盖"}],
+    }
+    duplicate_ai = {
+        "work_item": "石凳翻新",
+        "dimension": "描述完整性",
+        "finding": "石凳打磨及涂刷地坪漆工序未包含倒角部位收口防污染措施。",
+        "reason": "石凳存在大倒角。",
+        "recommendation": "补充美纹纸保护和倒角收口验收。",
+        "origin": "ai_final",
+    }
+    assert _dedupe_issues([duplicate_local, duplicate_ai]) == [duplicate_local]
     print("✅ 零星工程审核意见结构化测试通过！\n")
 
     # 测试16：v2 repair 引擎应围绕分项工程输出可修改意见
@@ -626,6 +649,10 @@ def run_tests():
                 ),
             },
             {
+                "heading": "水沟材料",
+                "text": "材料 | 采用灰色大理石水沟盖板，水沟盖板安装后做功能测试。",
+            },
+            {
                 "heading": "宿舍改造",
                 "text": "施工范围 | 卫生间轻质砖隔墙砌筑，墙面抹灰，混凝土结构隔层施工。",
             },
@@ -640,6 +667,14 @@ def run_tests():
         flat = "\n".join(r["result"] for reps in reports.values() for r in reps)
         for keyword in ["EPDM", "胶水配比", "水沟", "反坎", "植筋", "角铁", "防护剂", "3C", "油漆"]:
             assert keyword in flat
+        epdm_only_reports = run_repair_pipeline([
+            {
+                "heading": "EPDM和水沟样例",
+                "text": "施工范围 | EPDM塑胶地面铺设，水沟维修，采用灰色大理石水沟盖板。",
+            }
+        ], "EPDM水沟样例")
+        epdm_flat = "\n".join(r["result"] for reps in epdm_only_reports.values() for r in reps)
+        assert "六面防护" not in epdm_flat
         assert "安全文明施工费" not in flat
         assert "品牌违约" not in flat
     finally:
@@ -702,9 +737,9 @@ def run_tests():
             if caller_label == "repair_v2.plan":
                 return '[{"tool":"standards_search","query":"EPDM 胶水配比 验收","reason":"核对材料参数"},{"tool":"scheme_snippet","query":"EPDM 固化 养护","reason":"核对方案原文"}]'
             if caller_label == "repair_v2.final":
-                return '[{"dimension":"描述完整性","work_item":"EPDM塑胶地面","finding":"AI补充：EPDM胶水和验收参数仍需量化。","reason":"当前方案只写铺设，缺少胶水配比和验收指标。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充胶水配比、基层验收、固化时间和开放条件。","confidence":"中"}]'
+                return '[{"dimension":"描述完整性","work_item":"防火门","finding":"AI补充：防火门产品铭牌和顺序器复核要求未写明。","reason":"当前方案出现防火门更换，但未说明现场核对铭牌和双扇门顺序器。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充产品铭牌、型式资料、闭门器和顺序器检查要求。","confidence":"中"}]'
             if caller_label == "repair_v2.critic":
-                return '[{"dimension":"描述完整性","work_item":"EPDM塑胶地面","finding":"AI补充：EPDM胶水和验收参数仍需量化。","reason":"工具查询和方案原文均显示参数不足。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充胶水配比、基层验收、固化时间和开放条件。","confidence":"中"}]'
+                return '[{"dimension":"描述完整性","work_item":"防火门","finding":"AI补充：防火门产品铭牌和顺序器复核要求未写明。","reason":"工具查询和方案原文均显示防火门现场复核要求不足。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充产品铭牌、型式资料、闭门器和顺序器检查要求。","confidence":"中"}]'
             return "[]"
 
         repair_engine.call_llm = fake_call_llm
@@ -736,7 +771,7 @@ def run_tests():
         assert "调用预算**：3" in runtime_text
         assert "工具查询数**：2" in runtime_text
         flat = "\n".join(r["result"] for reps in reports.values() for r in reps)
-        assert "AI补充：EPDM胶水和验收参数仍需量化" in flat
+        assert "AI补充：防火门产品铭牌和顺序器复核要求未写明" in flat
 
         calls.clear()
 

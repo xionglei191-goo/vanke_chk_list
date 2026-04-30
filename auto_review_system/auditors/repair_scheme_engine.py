@@ -64,6 +64,10 @@ ISSUE_DOMAIN_TERMS = (
     "EPDM", "水沟", "植筋", "反坎", "钢化玻璃", "大理石", "石材", "C2TE", "瓷砖",
     "角铁", "方通", "油漆", "乳胶漆", "腻子", "抹灰", "防火门", "防水",
 )
+DUPLICATE_HINT_TERMS = ISSUE_DOMAIN_TERMS + (
+    "胶水", "配比", "固化", "养护", "基层", "石凳", "倒角", "美纹纸", "收口",
+    "防护剂", "六面", "试验记录", "清单", "报价", "工序", "成品保护",
+)
 COST_OR_MEASURE_HINT = re.compile(r"措施费|报价|白单|清单|对下|结算|计量|工程量")
 VALID_AI_REVIEW_MODES = {"off", "once", "adaptive", "quality"}
 AI_BUDGET_DEFAULTS = {"off": 0, "once": 1, "adaptive": 2, "quality": 3}
@@ -133,6 +137,23 @@ def _thinking_enabled():
 
 def _risk_terms_in_text(text):
     return [term for term in HIGH_RISK_TERMS if _contains(text, term)]
+
+
+def _stone_six_face_applicable(text):
+    """Only require six-face stone protection in real paving/finish contexts."""
+    if not _contains(text, "大理石", "石材", "花岗岩"):
+        return False
+    finish_context = re.search(
+        r"(电梯|厅|室内|墙面|门槛|台阶|地面铺贴|石材安装)[^。；\n]{0,80}"
+        r"(石材|大理石|花岗岩)[^。；\n]{0,80}(铺贴|粘贴|安装|饰面|地板)"
+        r"|(?:石材|大理石|花岗岩)[^。；\n]{0,80}(铺贴|粘贴|饰面|六面|防护剂|地面)",
+        str(text or ""),
+    )
+    if not finish_context:
+        return False
+    if _contains(text, "水沟盖板", "挡土墙") and not _contains(text, "铺贴", "粘贴", "饰面", "电梯"):
+        return False
+    return True
 
 
 def _complexity_score(combined_text, audit_sections, local_issues, experience_cards, global_cost_context):
@@ -428,7 +449,7 @@ def _local_rule_issues(text):
                 evidence_type="专家经验",
             )
 
-    if _contains(text, "大理石", "石材"):
+    if _stone_six_face_applicable(text):
         if not _contains(text, "防护剂", "六面", "背面"):
             _add_issue(
                 issues,
@@ -708,7 +729,11 @@ def _experience_issues_from_cards(cards):
             continue
         source_opinion = card.get("source_opinion", "")
         if card.get("match_scope") == "cross_project":
-            if COST_OR_MEASURE_HINT.search(source_opinion):
+            source_scope = " ".join(
+                str(card.get(key, ""))
+                for key in ("source_opinion", "source_project", "project_type", "file_type")
+            )
+            if COST_OR_MEASURE_HINT.search(source_scope):
                 continue
             if not _rewrite_suggestions_for_checkpoints(card.get("checkpoint_assessments", [])):
                 continue
@@ -761,9 +786,43 @@ def _dedupe_issues(issues):
         )
         if key in seen:
             continue
+        if any(_is_semantic_duplicate(existing, issue) for existing in deduped):
+            continue
         seen.add(key)
         deduped.append(issue)
     return deduped
+
+
+def _issue_duplicate_terms(issue):
+    text = " ".join(
+        str(issue.get(key, ""))
+        for key in ("work_item", "finding", "reason", "recommendation")
+    )
+    return {term for term in DUPLICATE_HINT_TERMS if term.lower() in text.lower()}
+
+
+def _is_semantic_duplicate(existing, candidate):
+    existing_text = re.sub(r"\W+", "", existing.get("finding", ""))
+    candidate_text = re.sub(r"\W+", "", candidate.get("finding", ""))
+    if existing_text and candidate_text and (
+        existing_text in candidate_text or candidate_text in existing_text
+    ):
+        return True
+
+    existing_terms = _issue_duplicate_terms(existing)
+    candidate_terms = _issue_duplicate_terms(candidate)
+    overlap = existing_terms & candidate_terms
+    if len(overlap) < 2:
+        return False
+
+    candidate_origin = str(candidate.get("origin", ""))
+    existing_has_controls = bool(existing.get("checkpoint_assessments"))
+    if candidate_origin.startswith("ai_") and existing_has_controls:
+        return True
+
+    if existing.get("dimension") == candidate.get("dimension") and existing.get("work_item") == candidate.get("work_item"):
+        return len(overlap) >= 3
+    return len(overlap) >= 4
 
 
 def _issue_domain_terms(issue):
@@ -1155,6 +1214,10 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
             section["text"] = "\n".join(
                 line for line in section["text"].splitlines()
                 if "保修" not in line and "防水工程5年" not in line
+                and "轻质砖隔墙砌筑" not in line
+                and "地面抬高及回填" not in line
+                and "卫生间铝扣板吊顶" not in line
+                and "我司主要施工内容" not in line
             )
     audit_sections = [section for section in sections if section.get("section_type") not in {"保修"}]
     combined_text = "\n".join(
