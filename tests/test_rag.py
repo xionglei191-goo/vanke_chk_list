@@ -569,6 +569,39 @@ def run_tests():
     runtime_issues = _experience_issues_from_cards(runtime_cards)
     assert runtime_issues
     assert "胶水配比" in runtime_issues[0]["result"]
+    generic_cross_card = {
+        "source_project": "历史防火门维修项目",
+        "source_opinion": "防火门更换方案未明确认证标志和允许偏差/验收指标。",
+        "work_category": "门窗玻璃",
+        "dimension": "描述完整性",
+        "alignment_status": "仍缺失",
+        "match_scope": "cross_project",
+        "scheme_gap": "当前方案片段未覆盖认证标志、允许偏差/验收指标。",
+        "expert_intent": "专家在追问：材料是否可现场核验，验收指标是否可量测。",
+        "reason": "安全敏感材料不能只写更换，应能指导进场验收和现场复核。",
+        "evidence_type": "专家经验",
+        "evidence_ref": "历史审核经验：零星工程专家意见",
+        "confidence": "中",
+        "checkpoint_assessments": [
+            {"name": "认证标志", "status": "未覆盖", "note": "未看到认证标志。"},
+            {"name": "允许偏差/验收指标", "status": "未覆盖", "note": "未看到可量测验收指标。"},
+        ],
+        "missing_points": ["认证标志", "允许偏差/验收指标"],
+        "partial_points": [],
+    }
+    generic_issues = _experience_issues_from_cards([generic_cross_card])
+    assert generic_issues
+    generic_result = generic_issues[0]["result"]
+    assert "认证标志" in generic_result
+    assert "允许偏差/验收指标" in generic_result
+    assert "材料或设备涉及安全、消防、强制认证" in generic_result
+    assert "验收项应写到可量测程度" in generic_result
+
+    unmapped_cross_card = dict(generic_cross_card)
+    unmapped_cross_card["checkpoint_assessments"] = [
+        {"name": "暂未映射检查点", "status": "未覆盖", "note": "测试用。"}
+    ]
+    assert not _experience_issues_from_cards([unmapped_cross_card])
     print("✅ 零星工程审核意见结构化测试通过！\n")
 
     # 测试16：v2 repair 引擎应围绕分项工程输出可修改意见

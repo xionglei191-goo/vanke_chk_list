@@ -109,6 +109,45 @@ def _counter_dict(counter):
     return {key: value for key, value in counter.most_common()}
 
 
+def _read_existing_manifest_paths(manifest_file):
+    manifest_file = str(manifest_file or "").strip()
+    if not manifest_file:
+        return {}
+    path = Path(os.path.expanduser(manifest_file))
+    if not path.is_absolute():
+        path = Path(PROJECT_DIR) / path
+    if not path.exists():
+        return {}
+
+    existing = {}
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            for project_name, value in payload.items():
+                if isinstance(value, dict):
+                    value = value.get("user_supplied_path") or value.get("source_path") or value.get("path")
+                if project_name and value:
+                    existing[_clean(project_name)] = _clean(value)
+        elif isinstance(payload, list):
+            for row in payload:
+                if not isinstance(row, dict):
+                    continue
+                project_name = _clean(row.get("project_name"))
+                value = _clean(row.get("user_supplied_path") or row.get("source_path") or row.get("path"))
+                if project_name and value:
+                    existing[project_name] = value
+        return existing
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            project_name = _clean(row.get("project_name"))
+            value = _clean(row.get("user_supplied_path") or row.get("source_path") or row.get("path"))
+            if project_name and value:
+                existing[project_name] = value
+    return existing
+
+
 def build_report(rows):
     total_counter = Counter(row.get("alignment_status", "") for row in rows)
     unresolved = [row for row in rows if row.get("alignment_status") == UNRESOLVED_STATUS]
@@ -239,7 +278,8 @@ def render_markdown(report):
     return "\n".join(lines) + "\n"
 
 
-def write_csv_manifest(report, path):
+def write_csv_manifest(report, path, existing_paths=None):
+    existing_paths = existing_paths or {}
     fieldnames = [
         "project_name",
         "unresolved_count",
@@ -273,7 +313,7 @@ def write_csv_manifest(report, path):
                 "match_quality": json.dumps(project["match_quality"], ensure_ascii=False),
                 "reason_counts": json.dumps(project["reason_counts"], ensure_ascii=False),
                 "needed_source": project["needed_source"],
-                "user_supplied_path": "",
+                "user_supplied_path": existing_paths.get(project["project_name"], ""),
                 "notes": "",
             })
 
@@ -290,6 +330,7 @@ def main():
     )
     args = parser.parse_args()
 
+    existing_paths = _read_existing_manifest_paths(args.source_manifest)
     rows = load_opinion_rows(args.opinion_file, args.material_dir, source_manifest=args.source_manifest or None)
     rows = enrich_rows_with_scheme_evidence(rows, args.material_dir)
     report = build_report(rows)
@@ -301,7 +342,7 @@ def main():
     csv_path = output_dir / "unresolved_review_source_manifest.csv"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(render_markdown(report), encoding="utf-8")
-    write_csv_manifest(report, csv_path)
+    write_csv_manifest(report, csv_path, existing_paths=existing_paths)
 
     print("Unresolved source analysis complete")
     print(f"- unresolved: {report['unresolved_count']} / {report['total_opinion_items']}")
