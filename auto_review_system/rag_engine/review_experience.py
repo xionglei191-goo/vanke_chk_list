@@ -276,7 +276,7 @@ PROFESSIONAL_ATTRIBUTION_RULES = [
 
 PROFESSIONAL_LABELS = {rule["code"]: rule["label"] for rule in PROFESSIONAL_ATTRIBUTION_RULES}
 
-ALIGNMENT_STATUSES = ("仍缺失", "部分补齐", "已补齐", "无法判断")
+ALIGNMENT_STATUSES = ("仍缺失", "部分补齐", "已补齐", "无法判断", "无需处理")
 CHECKPOINT_STATUSES = ("具体覆盖", "笼统提及", "未覆盖")
 
 SPECIFIC_CHECKPOINT_RULES = [
@@ -303,6 +303,20 @@ SPECIFIC_CHECKPOINT_RULES = [
     ("六面防护剂", ("六面", "防护剂"), ("六面", "防护剂", "石材防护")),
     ("现场滴水检查", ("滴水",), ("滴水", "水珠", "吸收", "滚落", "现场检查")),
     ("3C标识", ("3C",), ("3C", "CCC")),
+    ("防火门型式资料", ("型式认可证书", "型式检验报告", "核心资料三查"), ("型式认可证书", "型式检验报告", "检测报告", "合格证")),
+    ("产品铭牌", ("产品铭牌", "铭牌"), ("产品铭牌", "铭牌")),
+    ("填充密实检查", ("敲击门板", "填充是否密实", "偷工减料"), ("敲击", "门板", "填充", "密实")),
+    ("防火门顺序器", ("顺序器", "双开门", "双扇门"), ("顺序器", "双开门", "双扇门", "关闭顺序")),
+    ("分项开项", ("分项工程开项", "单独开项", "开项", "注明部位", "备注列中附图"), ("分项工程", "单独开项", "部位", "备注", "附图")),
+    ("泄水管", ("泄水管", "排/泄水管", "水压力", "水土流失"), ("泄水管", "排水管", "水压力", "水土流失")),
+    ("交换机型号", ("主交换机", "交换机", "型号"), ("交换机", "型号")),
+    ("端口分配", ("端口分配",), ("端口", "分配")),
+    ("连续通电测试", ("连续通电", "72小时", "通电运行测试"), ("连续通电", "72小时", "通电运行", "测试")),
+    ("电箱/立杆规格", ("电箱壁厚", "不锈钢等级", "立杆长宽厚", "立杆", "电箱"), ("电箱", "壁厚", "不锈钢", "立杆", "长宽厚")),
+    ("外墙裂缝材料体系", ("快干水泥", "防水抗裂砂浆", "丙烯酸防水涂料", "外墙裂缝"), ("快干水泥", "防水抗裂砂浆", "丙烯酸", "JS", "聚氨酯", "注浆")),
+    ("路面划线", ("路面划线", "划线"), ("路面划线", "标线", "划线")),
+    ("项目名称校核", ("项目名称填写错误", "项目名称"), ("项目名称", "工程名称")),
+    ("工期可控性", ("工期", "备货", "施工时间"), ("工期", "备货", "施工时间", "进度")),
 ]
 
 GENERIC_ARTIFACT_ALIASES = {
@@ -705,10 +719,52 @@ def _checkpoint_status(checkpoint, evidence_text):
                 return "笼统提及", "写了遍数，但未说明 1 底 1 面为什么满足空间耐久和观感要求。"
         return "具体覆盖", "已写明底漆和面漆遍数。"
 
-    if name in {"C2TE性能等级", "六面防护剂", "现场滴水检查", "3C标识", "轻质砂浆", "植筋深度/锚固", "错孔布置", "结构专业复核"}:
+    direct_presence_checkpoints = {
+        "C2TE性能等级", "六面防护剂", "现场滴水检查", "3C标识", "轻质砂浆",
+        "植筋深度/锚固", "错孔布置", "结构专业复核", "防火门型式资料",
+        "产品铭牌", "防火门顺序器", "泄水管", "交换机型号", "端口分配",
+        "连续通电测试", "路面划线",
+    }
+    if name in direct_presence_checkpoints:
         if has_mention:
             return "具体覆盖", f"已写明{name}。"
         return "未覆盖", f"未看到{name}。"
+
+    if name == "填充密实检查":
+        if has_mention:
+            return "具体覆盖", "已写出门板敲击或填充密实检查。"
+        return "未覆盖", "未看到门板填充密实的现场复核方法。"
+
+    if name == "分项开项":
+        if not has_mention:
+            return "未覆盖", "未看到按不同部位/做法单独开项或备注附图。"
+        if _contains_any(text, ("部位", "备注", "附图", "单独开项")):
+            return "具体覆盖", "已体现部位、备注或附图等分项开项口径。"
+        return "笼统提及", "提到分项，但未写清部位、备注或附图口径。"
+
+    if name == "电箱/立杆规格":
+        if not has_mention:
+            return "未覆盖", "未看到电箱壁厚、不锈钢等级或立杆长宽厚。"
+        if _has_numeric_or_threshold(text) and _contains_any(text, ("壁厚", "不锈钢", "立杆", "电箱")):
+            return "具体覆盖", "已写出电箱/立杆规格参数。"
+        return "笼统提及", "提到电箱或立杆，但未写明壁厚、材质等级或长宽厚。"
+
+    if name == "外墙裂缝材料体系":
+        if _contains_any(text, ("防水抗裂砂浆", "丙烯酸", "JS", "聚氨酯", "注浆")):
+            return "具体覆盖", "已写明外墙裂缝或渗漏修补材料体系。"
+        if _contains_any(text, ("外墙裂缝", "裂缝", "防水涂料", "快干水泥")):
+            return "笼统提及", "提到裂缝/防水材料，但未明确适配材料体系。"
+        return "未覆盖", "未看到外墙裂缝修补材料体系。"
+
+    if name == "项目名称校核":
+        if has_mention:
+            return "笼统提及", "文本包含项目/工程名称，但需人工核对是否填写正确。"
+        return "未覆盖", "未看到项目名称或工程名称，无法核对名称是否正确。"
+
+    if name == "工期可控性":
+        if has_mention:
+            return "笼统提及", "提到工期或施工时间，但仍需复核备货和实际施工可控性。"
+        return "未覆盖", "未看到工期、备货或施工时间安排。"
 
     if not has_mention:
         return "未覆盖", f"未看到{name}。"
@@ -775,6 +831,19 @@ def build_expert_intent(row):
     return f"专家在追问：{question}"
 
 
+def is_non_actionable_opinion(opinion):
+    text = _clean_text(opinion)
+    if text in {"同意", "无", "/", ""}:
+        return True
+    if text.startswith("同意"):
+        return True
+    if re.fullmatch(r"同意[。.!！]?", text):
+        return True
+    if text.startswith("亮点"):
+        return True
+    return False
+
+
 def assess_scheme_alignment(row):
     """Compare an expert opinion with extracted source-scheme evidence.
 
@@ -784,12 +853,35 @@ def assess_scheme_alignment(row):
     """
     evidence = row.get("scheme_evidence", []) or []
     opinion = row.get("opinion") or row.get("source_opinion", "")
+    if is_non_actionable_opinion(opinion):
+        return {
+            "alignment_status": "无需处理",
+            "covered_points": [],
+            "partial_points": [],
+            "missing_points": [],
+            "checkpoint_assessments": [],
+            "scheme_gap": "该条为同意或正向评价，不作为缺陷经验卡输出。",
+            "expert_intent": "该条不是问题意见，无需转化为缺陷检查规则。",
+            "evidence_chain": {
+                "source_opinion": opinion,
+                "scheme_evidence": evidence[:3],
+                "covered_points": [],
+                "partial_points": [],
+                "missing_points": [],
+                "checkpoint_assessments": [],
+                "alignment_status": "无需处理",
+                "scheme_gap": "该条为同意或正向评价，不作为缺陷经验卡输出。",
+                "expert_intent": "该条不是问题意见，无需转化为缺陷检查规则。",
+                "transfer_principle": "",
+            },
+        }
     attribution = {
         "required_artifacts": row.get("required_artifacts", []),
         "review_questions": row.get("review_questions", []),
     }
     checkpoints = expected_checkpoints_for(opinion, row.get("work_category", ""), attribution)
-    evidence_text = " ".join(item.get("text", "") for item in evidence)
+    alignment_text = row.get("alignment_text", "")
+    evidence_text = alignment_text or " ".join(item.get("text", "") for item in evidence)
     covered = []
     partial = []
     missing = []
@@ -809,7 +901,7 @@ def assess_scheme_alignment(row):
         else:
             missing.append(checkpoint["name"])
 
-    if not evidence:
+    if not evidence and not alignment_text:
         status = "无法判断"
         scheme_gap = "未找到可对照的原方案片段，需要先回到方案原文确认该意见的触发位置。"
     elif not checkpoints:
@@ -830,7 +922,10 @@ def assess_scheme_alignment(row):
         scheme_gap = "；".join(parts) + "。"
     else:
         status = "仍缺失"
-        scheme_gap = f"当前方案片段未覆盖 {'、'.join(missing)}，历史意见指向的关键控制点仍需补充。"
+        if alignment_text and not evidence:
+            scheme_gap = f"已对高可信匹配文件做全文检索，仍未覆盖 {'、'.join(missing)}，历史意见指向的关键控制点仍需补充。"
+        else:
+            scheme_gap = f"当前方案片段未覆盖 {'、'.join(missing)}，历史意见指向的关键控制点仍需补充。"
 
     return {
         "alignment_status": status,
@@ -881,6 +976,40 @@ def index_material_files(material_dir=DEFAULT_MATERIAL_DIR):
     if not base.exists():
         return []
     return [p for p in base.iterdir() if p.is_file() and not p.name.startswith(".~")]
+
+
+GENERIC_NAME_WORDS = {
+    "广州", "万科", "工程", "报价", "清单", "施工", "方案", "项目", "维修", "改造",
+    "翻新", "零星", "花园", "小区", "专项", "二类", "一类",
+}
+
+
+def _normalized_material_name(value):
+    text = _clean_text(value)
+    text = re.sub(r"F\d{2}", "", text, flags=re.I)
+    text = re.sub(r"\d{6,8}", "", text)
+    text = re.sub(r"[（(].*?[）)]", "", text)
+    for word in GENERIC_NAME_WORDS:
+        text = text.replace(word, "")
+    text = re.sub(r"[\s_+\-—、，,：:（）()]+", "", text)
+    return text
+
+
+def material_match_quality(project_name, material_file):
+    if not material_file:
+        return {"label": "未匹配", "score": 0.0}
+    project = _normalized_material_name(project_name)
+    matched = _normalized_material_name(Path(material_file).stem)
+    if not project or not matched:
+        return {"label": "需人工确认", "score": 0.0}
+    score = difflib.SequenceMatcher(None, project, matched).ratio()
+    if project in matched or matched in project:
+        label = "高"
+    elif score >= 0.68:
+        label = "中"
+    else:
+        label = "低，疑似错配"
+    return {"label": label, "score": round(score, 3)}
 
 
 def match_material_file(project_name, files):
@@ -1015,6 +1144,10 @@ def _material_text_lines(path):
     return lines
 
 
+def _material_full_text(path):
+    return "\n".join(line.get("text", "") for line in _material_text_lines(path))
+
+
 def _evidence_keywords(opinion, work_category=""):
     generic = {
         "广州", "万科", "工程", "施工", "方案", "报价", "清单", "明确", "需要", "缺失",
@@ -1079,12 +1212,27 @@ def extract_scheme_evidence(row, material_dir=DEFAULT_MATERIAL_DIR, max_snippets
     return evidence
 
 
+def _matched_path_for_row(row, material_dir=DEFAULT_MATERIAL_DIR):
+    matched_path = row.get("matched_file_path")
+    matched_file = row.get("matched_file")
+    if matched_path:
+        return Path(matched_path)
+    if matched_file:
+        return Path(material_dir) / matched_file
+    return None
+
+
 def enrich_rows_with_scheme_evidence(rows, material_dir=DEFAULT_MATERIAL_DIR, max_snippets=3):
     enriched = []
     for row in rows:
         copy = dict(row)
         copy["scheme_evidence"] = extract_scheme_evidence(copy, material_dir=material_dir, max_snippets=max_snippets)
+        if not copy["scheme_evidence"] and copy.get("source_match_quality_label") in {"高", "中", "人工映射"}:
+            matched_path = _matched_path_for_row(copy, material_dir=material_dir)
+            if matched_path and matched_path.exists():
+                copy["alignment_text"] = _material_full_text(matched_path)
         copy.update(assess_scheme_alignment(copy))
+        copy.pop("alignment_text", None)
         enriched.append(copy)
     return enriched
 
@@ -1105,6 +1253,10 @@ def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MA
         manifest_file = source_map.get(project_name)
         material_file = manifest_file or match_material_file(project_name, files)
         source_match_type = "manifest" if manifest_file else ("fuzzy" if material_file else "")
+        if manifest_file:
+            match_quality = {"label": "人工映射", "score": 1.0}
+        else:
+            match_quality = material_match_quality(project_name, material_file)
         project_type = classify_project_type(project_name)
         for item_index, item in enumerate(split_opinion_items(opinion), start=1):
             work_category = infer_work_category(f"{project_name} {item}")
@@ -1121,6 +1273,8 @@ def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MA
                 "matched_file": material_file.name if material_file else "",
                 "matched_file_path": str(material_file) if material_file else "",
                 "source_match_type": source_match_type,
+                "source_match_quality_label": match_quality["label"],
+                "source_match_quality_score": match_quality["score"],
                 "file_type": material_file.suffix.lower().lstrip(".") if material_file else "",
                 "work_category": work_category,
                 "dimension": dimension,
@@ -1135,7 +1289,7 @@ def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MA
 
 def should_promote_to_experience(row, scope="scheme-priority"):
     opinion = _clean_text(row.get("opinion", ""))
-    if opinion in {"同意", "无", "/", ""}:
+    if is_non_actionable_opinion(opinion):
         return False
     if len(opinion) <= 8 and re.search(r"[:：]$", opinion):
         return False

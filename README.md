@@ -149,7 +149,7 @@ PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/analyz
 - `unresolved_review_sources.json`：完整结构化明细，包含每条意见的行号、意见原文、维度、工程类别、缺口原因和应补资料。
 - `unresolved_review_source_manifest.csv`：补件工作表，给每个项目预留 `user_supplied_path` 和 `notes`。
 
-当前基线结果是：`432` 条原子审核意见中，`266` 条仍为“无法判断”；其中 `207` 条未匹配到本地原始材料文件，`59` 条有相近文件但没有定位到触发片段。后者可能是文件名相近但实际错配，也可能是专家意见对应旧版方案、报价白单或附件片段。
+当前基线结果是：`432` 条原子审核意见中，`243` 条仍为“无法判断”；其中 `205` 条未匹配到本地原始材料文件，`38` 条属于低质量模糊匹配、疑似错配。高/中质量已匹配文件已经完成全文控制点检索并进入 `已补齐/部分补齐/仍缺失/无需处理`，不再残留“已匹配但未定位触发片段”的意见。
 
 补充原始方案后，在 `unresolved_review_source_manifest.csv` 的 `user_supplied_path` 填入文件路径。路径支持三种写法：
 

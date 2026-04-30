@@ -54,6 +54,11 @@ def _normalized_name(value):
 
 
 def _match_quality(row):
+    if row.get("source_match_quality_label"):
+        return {
+            "label": row.get("source_match_quality_label"),
+            "score": row.get("source_match_quality_score", 0.0),
+        }
     if row.get("source_match_type") == "manifest":
         return {"label": "人工映射", "score": 1.0}
     matched_file = row.get("matched_file")
@@ -77,6 +82,8 @@ def _reason(row):
     if not row.get("matched_file"):
         return "未匹配到本地原始材料文件"
     if not row.get("scheme_evidence"):
+        if _match_quality(row)["label"] == "低，疑似错配":
+            return "低质量模糊匹配，疑似错配"
         return "已匹配文件但未定位到意见触发片段"
     if not row.get("checkpoint_assessments"):
         return "意见缺少可机械拆解的控制点"
@@ -91,6 +98,8 @@ def _needed_source(row):
         return "请提供该项目专家审核时使用的原始方案/附件，或确认文件名与项目名的对应关系。"
     if reason == "已匹配文件但未定位到意见触发片段":
         return "本地已有相近文件，但未找到触发片段；请确认是否还有旧版方案、报价白单、附件或文件名口径不同的材料。"
+    if reason == "低质量模糊匹配，疑似错配":
+        return "当前候选文件只因名称相近被模糊匹配，且未找到触发片段；请提供该意见真正对应的原始方案、报价白单或附件。"
     if reason == "意见缺少可机械拆解的控制点":
         return "请补充该条意见的上下文或专家批注，便于拆成可复用控制点。"
     return "请人工回看原方案触发位置，并补充对应页/章节。"
