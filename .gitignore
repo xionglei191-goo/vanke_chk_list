@@ -1,0 +1,65 @@
+# Raw materials and output data
+原始材料/
+已审核文件夹/
+方案评审/
+方案评审.7z
+*.7z
+*.zip
+*.rar
+*.xlsx
+*.csv
+
+# Python and virtual environments
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Databases and temporary uploads
+temp_uploads/
+auto_review_system/temp_uploads/
+vector_db/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+
+# Logs
+logs/
+auto_review_system/logs/
+*.log
+*.db
+
+# Data and Storage
+auto_review_system/data/results/
+auto_review_system/data/pageindex_ocr_cache/
+auto_review_system/data/pageindex_trees/
+auto_review_system/data/knowledge_base*.json
+auto_review_system/data/knowledge_base.json.*
+auto_review_system/data/correction_cases.json
+auto_review_system/data/standard_pdf_registry.json
+auto_review_system/data/.kb_lock
+vector_db_storage/
+auto_review_system/vector_db_storage/
+
+# Temp/debug files
+nohup.out
+strace.log
+output.txt
+result.md
+*.pid
+get-pip.py
+temp_debug_json/
+auto_review_system/temp_debug_json/
+auto_review_system/output.txt
+auto_review_system/dummy.pdf
+auto_review_system/t.pdf
