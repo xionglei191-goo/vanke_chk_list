@@ -70,7 +70,7 @@ DUPLICATE_HINT_TERMS = ISSUE_DOMAIN_TERMS + (
 )
 COST_OR_MEASURE_HINT = re.compile(r"措施费|报价|白单|清单|对下|结算|计量|工程量")
 VALID_AI_REVIEW_MODES = {"off", "once", "adaptive", "quality"}
-AI_BUDGET_DEFAULTS = {"off": 0, "once": 1, "adaptive": 2, "quality": 3}
+AI_BUDGET_DEFAULTS = {"off": 0, "once": 1, "adaptive": 3, "quality": 3}
 HIGH_RISK_TERMS = ("防水", "渗漏", "植筋", "防火门", "钢化玻璃", "给排水", "弱电", "电梯", "石材", "EPDM")
 ALLOWED_REPAIR_TOOLS = {"standards_search", "experience_search", "scheme_snippet", "cost_snippet"}
 GENERIC_QUERY_TOKENS = {
@@ -143,17 +143,12 @@ def _stone_six_face_applicable(text):
     """Only require six-face stone protection in real paving/finish contexts."""
     if not _contains(text, "大理石", "石材", "花岗岩"):
         return False
-    finish_context = re.search(
+    return bool(re.search(
         r"(电梯|厅|室内|墙面|门槛|台阶|地面铺贴|石材安装)[^。；\n]{0,80}"
         r"(石材|大理石|花岗岩)[^。；\n]{0,80}(铺贴|粘贴|安装|饰面|地板)"
         r"|(?:石材|大理石|花岗岩)[^。；\n]{0,80}(铺贴|粘贴|饰面|六面|防护剂|地面)",
         str(text or ""),
-    )
-    if not finish_context:
-        return False
-    if _contains(text, "水沟盖板", "挡土墙") and not _contains(text, "铺贴", "粘贴", "饰面", "电梯"):
-        return False
-    return True
+    ))
 
 
 def _complexity_score(combined_text, audit_sections, local_issues, experience_cards, global_cost_context):
@@ -1088,6 +1083,33 @@ def _issues_from_ai_items(data, origin="ai_final"):
     return issues
 
 
+def _refresh_issue_result(issue):
+    rebuilt = _issue(
+        issue.get("work_item") or "AI综合判断",
+        issue.get("dimension") if issue.get("dimension") in CORE_DIMENSIONS else "描述完整性",
+        issue.get("finding") or "审核问题",
+        issue.get("reason") or "",
+        issue.get("recommendation") or "",
+        evidence_type=issue.get("evidence_type") or "专家经验",
+        evidence_ref=issue.get("evidence_ref") or "AI综合审核：历史经验+规范候选+方案内部逻辑",
+        confidence=issue.get("confidence") if issue.get("confidence") in {"高", "中", "低"} else "中",
+        checkpoint_assessments=issue.get("checkpoint_assessments", []),
+        covered_points=issue.get("covered_points", []),
+        partial_points=issue.get("partial_points", []),
+        missing_points=issue.get("missing_points", []),
+        alignment_status=issue.get("alignment_status", ""),
+    )
+    origin = issue.get("origin")
+    rebuilt.update({
+        "origin": origin,
+        "covered_points": issue.get("covered_points", []),
+        "partial_points": issue.get("partial_points", []),
+        "missing_points": issue.get("missing_points", []),
+        "alignment_status": issue.get("alignment_status", ""),
+    })
+    return rebuilt
+
+
 def _parse_ai_issues(raw_text, origin="ai_final"):
     data = _json_array_from_text(raw_text)
     if data is None:
@@ -1138,10 +1160,10 @@ def _ai_reasoned_issues(project_name, sections, local_issues, experience_cards, 
     return _parse_ai_issues(result, origin="ai_final")
 
 
-def _ai_critic_issues(project_name, sections, protected_local_issues, ai_issues, tool_context):
-    if not ai_issues:
-        return ai_issues
-    user_prompt = build_repair_critic_user_prompt(project_name, sections, protected_local_issues, ai_issues, tool_context)
+def _ai_critic_issues(project_name, sections, candidate_issues, tool_context):
+    if not candidate_issues:
+        return candidate_issues
+    user_prompt = build_repair_critic_user_prompt(project_name, sections, candidate_issues, tool_context)
     result = call_llm(
         REPAIR_CRITIC_SYSTEM_PROMPT,
         user_prompt,
@@ -1152,8 +1174,44 @@ def _ai_critic_issues(project_name, sections, protected_local_issues, ai_issues,
     )
     data = _json_array_from_text(result)
     if data is None:
-        return ai_issues
-    return _issues_from_ai_items(data, origin="ai_critic")
+        return candidate_issues
+    decisions = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("candidate_index"))
+        except Exception:
+            continue
+        if 0 <= idx < len(candidate_issues) and idx not in decisions:
+            decisions[idx] = item
+
+    reviewed = []
+    for idx, issue in enumerate(candidate_issues):
+        decision = decisions.get(idx, {})
+        action = str(decision.get("action") or "keep").strip().lower()
+        if action == "drop":
+            continue
+        copied = dict(issue)
+        if action == "revise":
+            field_map = {
+                "dimension": "dimension",
+                "work_item": "work_item",
+                "finding": "finding",
+                "reason_detail": "reason",
+                "evidence_type": "evidence_type",
+                "evidence_ref": "evidence_ref",
+                "recommendation": "recommendation",
+                "confidence": "confidence",
+            }
+            for src, dest in field_map.items():
+                value = decision.get(src)
+                if value:
+                    copied[dest] = value
+            copied["origin"] = copied.get("origin") or "ai_critic"
+            copied = _refresh_issue_result(copied)
+        reviewed.append(copied)
+    return reviewed
 
 
 def _runtime_info_report(runtime):
@@ -1206,18 +1264,9 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
     sections = split_repair_scheme_sections(chunks_ready_for_agents)
     for section in sections:
         if section.get("section_type") == "界面划分":
-            section["text"] = re.sub(
-                r"2\.3\.5我司主要施工内容[:：]?[^\n]*轻质砖隔墙砌筑[^\n]*",
-                "",
-                section.get("text", ""),
-            )
             section["text"] = "\n".join(
                 line for line in section["text"].splitlines()
                 if "保修" not in line and "防水工程5年" not in line
-                and "轻质砖隔墙砌筑" not in line
-                and "地面抬高及回填" not in line
-                and "卫生间铝扣板吊顶" not in line
-                and "我司主要施工内容" not in line
             )
     audit_sections = [section for section in sections if section.get("section_type") not in {"保修"}]
     combined_text = "\n".join(
@@ -1238,8 +1287,8 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
     experience_issues = _experience_issues_from_cards(experience_cards)
 
     issues = []
-    issues.extend(local_issues)
     issues.extend(experience_issues)
+    issues.extend(local_issues)
     complexity_score, complexity_reasons = _complexity_score(
         combined_text,
         audit_sections,
@@ -1310,14 +1359,15 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
             )
             remaining_budget -= 1
 
-        if ai_mode == "quality" and remaining_budget > 0 and ai_issues:
-            if progress_callback:
-                progress_callback("🧪 v2零星工程审核：开始 AI 质量复核，压制偏题和无证据结论。", 0.82)
-            runtime_info["stages"].append("ai_critic")
-            ai_issues = _ai_critic_issues(project_name, audit_sections, issues, ai_issues, tool_context)
-            remaining_budget -= 1
+        if ai_issues:
+            issues.extend(ai_issues)
 
-        issues.extend(ai_issues)
+        if ai_mode in {"adaptive", "quality"} and remaining_budget > 0 and issues:
+            if progress_callback:
+                progress_callback("🧪 v2零星工程审核：开始 AI 适用性复核，压制偏题、误迁移和无证据结论。", 0.82)
+            runtime_info["stages"].append("ai_critic")
+            issues = _ai_critic_issues(project_name, audit_sections, issues, tool_context)
+            remaining_budget -= 1
     else:
         tool_context = {"methodology": {"core_dimensions": list(CORE_DIMENSIONS)}, "standard_snippets": []}
         runtime_info["stages"].append("local_only")

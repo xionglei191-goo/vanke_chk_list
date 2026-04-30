@@ -58,18 +58,23 @@ evidence_type 只能是 规范/专家经验/方案内部逻辑。
 
 
 REPAIR_CRITIC_SYSTEM_PROMPT = """
-你是万科零星工程审核结论质量复核专家。你的任务只复核 AI 生成的候选问题，不能删除本地规则和历史经验卡问题。
+你是万科零星工程审核结论适用性复核专家。你的任务是复核全部候选问题是否真的适用于当前方案，不按来源盲目保护。
 
-请在内部使用 reasoning/thinking 检查每条 AI 候选：
+请在内部使用 reasoning/thinking 检查每条候选：
 1. 是否有当前方案、工具证据、规范候选或历史经验支撑。
-2. 是否机械照搬历史意见。
+2. 是否机械照搬历史意见，或只是因为出现了泛词就误迁移。
 3. 是否偏题到安全文明费、品牌违约、合同处罚、超高降效等泛化话术。
 4. 是否能让班组长直接修改方案。
+5. 对带控制点判断的候选要谨慎，除非当前方案明显不是同类分项或证据不足，才删除。
 
-只输出“保留或修订后的 AI 问题”JSON 数组。字段固定为：
-dimension, work_item, finding, reason, evidence_type, evidence_ref, recommendation, confidence
+只输出 JSON 数组，每个元素字段固定为：
+candidate_index, action, reason
 
-如果 AI 候选都不应保留，输出 []。
+action 只能是 keep / drop / revise。
+如果 action=revise，可以追加以下修订字段：
+dimension, work_item, finding, reason_detail, evidence_type, evidence_ref, recommendation, confidence
+
+每个 candidate_index 最多输出一次。没有输出的候选会按 keep 处理。
 不要输出 Markdown、解释文字或思维链。
 """
 
@@ -160,13 +165,14 @@ def build_repair_review_user_prompt(project_name, sections, local_issues, experi
     )
 
 
-def build_repair_critic_user_prompt(project_name, sections, local_issues, ai_issues, tool_context):
+def build_repair_critic_user_prompt(project_name, sections, candidate_issues, tool_context):
     payload = {
         "project_name": project_name,
         "scheme_sections": _sections_payload(sections),
-        "protected_local_findings": _local_issues_payload(local_issues, limit=30),
-        "ai_candidate_findings": [
+        "candidate_findings": [
             {
+                "candidate_index": idx,
+                "origin": item.get("origin") or "local_or_experience",
                 "dimension": item.get("dimension"),
                 "work_item": item.get("work_item"),
                 "finding": item.get("finding"),
@@ -175,13 +181,17 @@ def build_repair_critic_user_prompt(project_name, sections, local_issues, ai_iss
                 "evidence_ref": item.get("evidence_ref"),
                 "recommendation": item.get("recommendation"),
                 "confidence": item.get("confidence"),
+                "alignment_status": item.get("alignment_status"),
+                "partial_points": item.get("partial_points"),
+                "missing_points": item.get("missing_points"),
+                "checkpoint_assessments": item.get("checkpoint_assessments"),
             }
-            for item in ai_issues[:20]
+            for idx, item in enumerate(candidate_issues[:30])
         ],
         "tool_context": tool_context,
     }
     return (
-        "请复核 AI 候选审核问题，删除偏题、无证据或照搬历史意见的问题，必要时修订措辞。"
+        "请复核候选审核问题，删除偏题、无证据或照搬历史意见的问题，必要时修订措辞。"
         "只输出 JSON 数组。\n\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )

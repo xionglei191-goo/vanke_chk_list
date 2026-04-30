@@ -714,6 +714,8 @@ def run_tests():
         assert _ai_review_mode() == "off"
         os.environ["REPAIR_AI_REVIEW_ENABLED"] = "true"
         assert _ai_review_mode() == "adaptive"
+        os.environ.pop("REPAIR_AI_CALL_BUDGET", None)
+        assert _ai_call_budget("adaptive") == 3
         os.environ["REPAIR_AI_REVIEW_MODE"] = "quality"
         os.environ["REPAIR_AI_CALL_BUDGET"] = "3"
         assert _ai_review_mode() == "quality"
@@ -739,7 +741,7 @@ def run_tests():
             if caller_label == "repair_v2.final":
                 return '[{"dimension":"描述完整性","work_item":"防火门","finding":"AI补充：防火门产品铭牌和顺序器复核要求未写明。","reason":"当前方案出现防火门更换，但未说明现场核对铭牌和双扇门顺序器。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充产品铭牌、型式资料、闭门器和顺序器检查要求。","confidence":"中"}]'
             if caller_label == "repair_v2.critic":
-                return '[{"dimension":"描述完整性","work_item":"防火门","finding":"AI补充：防火门产品铭牌和顺序器复核要求未写明。","reason":"工具查询和方案原文均显示防火门现场复核要求不足。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充产品铭牌、型式资料、闭门器和顺序器检查要求。","confidence":"中"}]'
+                return '[{"candidate_index":0,"action":"keep","reason":"测试中保留候选，未输出的候选按 keep 处理。"}]'
             return "[]"
 
         repair_engine.call_llm = fake_call_llm
