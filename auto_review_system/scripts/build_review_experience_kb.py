@@ -91,6 +91,8 @@ def main():
     print(f"- benchmarks: {outputs['benchmark_path']}")
     print(f"- methodology: {outputs['methodology_path']}")
     print(f"- deep_cases: {outputs['deep_cases_path']}")
+    print(f"- alignment_cases: {outputs['alignment_cases_path']}")
+    print(f"- alignment_report: {outputs['alignment_report_path']}")
     print("- dimensions:")
     for key, value in summary["dimensions"].most_common():
         print(f"  {key}: {value}")
@@ -102,6 +104,9 @@ def main():
         print(f"  {key}: {value}")
     print("- professional_attributions:")
     for key, value in summary["professional_attributions"].most_common():
+        print(f"  {key}: {value}")
+    print("- alignment_statuses:")
+    for key, value in summary["alignment_statuses"].most_common():
         print(f"  {key}: {value}")
 
     if args.apply and not args.dry_run:

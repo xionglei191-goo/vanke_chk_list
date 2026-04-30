@@ -54,7 +54,7 @@ DIMENSION_PATTERNS = {
 }
 
 EVIDENCE_HINTS = [
-    ("规范", re.compile(r"不得|必须|严禁|强制|3C|合格证|检测报告|闭水|验收|复验|MU\d+|C\d+")),
+    ("规范", re.compile(r"不得|必须|严禁|强制|3C|合格证|检测报告|闭水|复验|MU\d+|C\d+")),
     ("方案内部逻辑", re.compile(r"复核|不符|不匹配|冲突|矛盾|怎么还有|先|后|再|标高|对应|型号")),
 ]
 
@@ -275,6 +275,88 @@ PROFESSIONAL_ATTRIBUTION_RULES = [
 
 PROFESSIONAL_LABELS = {rule["code"]: rule["label"] for rule in PROFESSIONAL_ATTRIBUTION_RULES}
 
+ALIGNMENT_STATUSES = ("仍缺失", "部分补齐", "已补齐", "无法判断")
+CHECKPOINT_STATUSES = ("具体覆盖", "笼统提及", "未覆盖")
+
+SPECIFIC_CHECKPOINT_RULES = [
+    ("胶水配比", ("胶水比", "胶水配比", "配比", "比例"), ("胶水比", "胶水配比", "配比", "比例")),
+    ("固化/养护时间", ("固化", "养护", "开放使用"), ("固化", "养护", "开放使用", "干燥时间")),
+    ("基层验收", ("基层验收", "基层"), ("基层验收", "基层", "平整", "干燥", "含水率", "空鼓")),
+    ("水沟交接顺序", ("水沟与EPDM", "水沟交接", "EPDM交接", "先修复水沟"), ("水沟", "接缝", "顺直", "成品保护", "先修复")),
+    ("倒角收口", ("倒角", "美纹纸"), ("倒角", "美纹纸", "收口", "遮蔽", "边缘")),
+    ("混凝土反坎", ("反坎",), ("反坎", "200mm", "混凝土", "卫生间", "有水房间")),
+    ("抹灰厚度", ("抹灰厚度", "10mm", "20mm"), ("抹灰厚度", "10mm", "20mm", "厚度")),
+    ("轻质砂浆", ("轻质砂浆",), ("轻质砂浆", "薄抹灰", "砂浆类型")),
+    ("植筋深度/锚固", ("植筋", "锚固"), ("植筋", "锚固", "孔径", "孔深", "深度", "拉拔")),
+    ("错孔布置", ("错位", "错孔", "水平通缝"), ("错位", "错孔", "水平通缝", "避让")),
+    ("结构专业复核", ("后加板", "结构风险", "隔层"), ("后加板", "隔层", "结构复核", "结构风险", "替代方案")),
+    ("腻子基层处理", ("腻子", "刮腻子"), ("腻子", "铲除", "打磨", "基层处理", "修补")),
+    ("油漆遍数", ("乳胶漆", "1底1面", "一底一面", "底漆", "面漆", "油漆为什么"), ("油漆", "乳胶漆", "底漆", "面漆", "1底1面", "一底一面", "遍")),
+    ("角铁规格", ("角铁",), ("角铁", "50×50×5", "50*50*5", "规格", "尺寸")),
+    ("方通使用部位", ("方通", "方管"), ("方通", "方管", "使用部位", "侧边", "骨架", "承重")),
+    ("安装间距", ("间距",), ("间距", "400mm", "500mm", "不超过")),
+    ("焊接防腐", ("焊接", "防腐", "防锈"), ("焊接", "焊渣", "防腐", "防锈", "底漆", "面漆")),
+    ("C2TE性能等级", ("C2TE",), ("C2TE",)),
+    ("专用瓷砖胶/粘结剂", ("瓷砖胶", "专用瓷砖胶"), ("瓷砖胶", "专用粘结剂", "胶粘剂", "粘结剂")),
+    ("禁止干铺", ("干铺",), ("不得干铺", "禁止干铺", "干铺", "湿铺")),
+    ("六面防护剂", ("六面", "防护剂"), ("六面", "防护剂", "石材防护")),
+    ("现场滴水检查", ("滴水",), ("滴水", "水珠", "吸收", "滚落", "现场检查")),
+    ("3C标识", ("3C",), ("3C", "CCC")),
+]
+
+GENERIC_ARTIFACT_ALIASES = {
+    "项目名称": ("项目名称", "工程名称"),
+    "维修对象": ("维修对象", "施工范围", "施工内容", "部位"),
+    "现状问题描述": ("现状", "问题", "病害", "渗漏", "破损", "原有"),
+    "目标效果": ("目标", "效果", "交付标准", "验收"),
+    "现场照片或描述": ("现场", "照片", "现状", "原有"),
+    "原基层/原材料": ("原基层", "旧基层", "基层", "原材料", "原装饰面"),
+    "病害原因": ("原因", "水源", "渗漏路径", "裂缝"),
+    "处理分支": ("如", "若", "分别", "处理分支", "不同情况"),
+    "白单/清单对应关系": ("白单", "清单", "报价", "对应"),
+    "项目特征": ("项目特征", "特征描述"),
+    "工程量口径": ("工程量", "计量", "按实", "扣除"),
+    "措施项目": ("措施", "脚手架", "围蔽", "吊车", "台班"),
+    "材料规格表": ("规格", "型号", "厚度", "强度", "材质", "等级", "尺寸"),
+    "设备参数": ("参数", "功率", "容量", "分辨率", "带宽", "存储"),
+    "认证标志": ("认证", "标识", "3C", "S标", "铭牌"),
+    "允许偏差/验收指标": ("允许偏差", "验收指标", "偏差", "空鼓", "平整度"),
+    "工艺适用条件": ("适用", "基层", "环境", "潮湿", "振动"),
+    "基层处理要求": ("基层处理", "基层清理", "打磨", "找平"),
+    "替代材料说明": ("替代", "改用", "建议采用"),
+    "相容性说明": ("相容", "粘结", "配套", "系统"),
+    "节点做法": ("节点", "收口", "附加层", "管根", "洞口"),
+    "收口措施": ("收口", "密封", "打胶", "美纹纸"),
+    "搭接尺寸": ("搭接", "上翻", "宽度", "尺寸"),
+    "成品保护": ("成品保护", "保护", "遮蔽"),
+    "施工流程": ("施工流程", "施工工序", "顺序", "先", "后"),
+    "工序间隔": ("间隔", "固化", "养护", "干燥"),
+    "保护措施": ("保护", "围蔽", "遮挡", "覆盖"),
+    "开放使用条件": ("开放", "投入使用", "养护", "固化"),
+    "合格证/检测报告": ("合格证", "检测报告", "材质证明", "型式检验"),
+    "试验记录": ("试验", "闭水", "通水", "拉拔", "试运行"),
+    "验收指标": ("验收", "指标", "偏差", "质量要求"),
+    "影像或记录表": ("记录", "影像", "照片", "验收表"),
+    "临时措施": ("临时", "脚手架", "吊车", "曲臂车", "围挡"),
+    "安全防护": ("防护", "临边", "高处", "防坠"),
+    "设备台班": ("台班", "吊车", "机械"),
+    "施工组织约束": ("施工时间", "工期", "运营", "通行"),
+    "容量计算": ("计算", "容量", "承载", "水压", "流量"),
+    "功能参数": ("功能", "参数", "存储", "供电", "带宽"),
+    "荷载等级": ("荷载", "承载", "等级", "吨"),
+    "试运行要求": ("试运行", "调试", "通电运行"),
+    "节点示意": ("节点示意", "简图", "图示"),
+    "线路图": ("线路图", "线路", "接线"),
+    "构件尺寸表": ("构件", "长度", "尺寸"),
+    "安装位置": ("安装位置", "部位", "点位"),
+    "统一术语": ("术语", "名称", "名词"),
+    "单位校核": ("单位", "mm", "m2", "m³"),
+    "楼栋部位校核": ("楼栋", "部位", "栋", "层"),
+    "模板清理": ("模板", "保修", "移交状态"),
+    "方案原文证据": ("施工范围", "施工工序", "验收", "材料"),
+    "专家复核备注": ("复核", "备注", "意见"),
+}
+
 
 def _clean_text(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
@@ -451,6 +533,8 @@ def infer_evidence_type(opinion, dimension):
 def infer_evidence_ref(opinion, work_category, evidence_type):
     if evidence_type == "方案内部逻辑":
         return "方案文本内部一致性校核"
+    if evidence_type != "规范":
+        return "历史审核经验：零星工程专家意见"
     text = f"{opinion} {work_category}"
     for ref, keywords in STANDARD_HINTS:
         if keywords and any(keyword.lower() in text.lower() for keyword in keywords):
@@ -552,6 +636,224 @@ def trigger_keywords_for(opinion, project_name="", work_category=""):
     return keywords[:10]
 
 
+def _contains_any(text, aliases):
+    haystack = str(text or "").lower()
+    return any(str(alias).lower() in haystack for alias in aliases if str(alias).strip())
+
+
+def _has_numeric_or_threshold(text):
+    return bool(re.search(r"\d+\s*(?:[:：]\s*\d+|小时|h|H|天|日|d|D|mm|cm|m|%|遍|级)|[≥≤]|不超过|不小于|不少于", str(text or "")))
+
+
+def _checkpoint_status(checkpoint, evidence_text):
+    name = checkpoint["name"]
+    aliases = checkpoint["aliases"]
+    has_mention = _contains_any(evidence_text, aliases)
+    text = str(evidence_text or "")
+
+    if name == "胶水配比":
+        if not has_mention:
+            return "未覆盖", "未看到胶水比例或配比要求。"
+        exact = re.search(r"(胶水比|胶水配比|配比|比例)[^。；，,]{0,30}(\d+\s*[:：]\s*\d+|\d+\s*(?:%|份)|按[^。；，,]{1,30}比例)", text, re.I)
+        if exact:
+            return "具体覆盖", "已写出胶水配比或可执行的配比口径。"
+        return "笼统提及", "仅提到配比/配比证明，未写明胶水比例或施工配合比。"
+
+    if name == "固化/养护时间":
+        if not has_mention:
+            return "未覆盖", "未看到固化、养护或开放使用时间。"
+        exact = re.search(r"(固化|养护|干燥|开放使用)[^。；，,]{0,40}(\d+\s*(?:小时|h|H|天|日|d|D))|(\d+\s*(?:小时|h|H|天|日|d|D))[^。；，,]{0,40}(固化|养护|干燥|开放使用)", text)
+        if exact:
+            return "具体覆盖", "已写出固化/养护/开放使用的时间条件。"
+        return "笼统提及", "仅写固化或养护动作，未写时间或开放使用条件。"
+
+    if name == "基层验收":
+        if not has_mention:
+            return "未覆盖", "未看到基层验收或基层条件要求。"
+        exact = re.search(r"(基层|地面验收)[^。；]{0,120}(含水率|平整度|强度|空鼓|起砂|干燥|清洁|无杂物|无松动|2m|≤|≥)", text)
+        if exact:
+            return "具体覆盖", "已把基层验收和具体指标或状态要求关联起来。"
+        return "笼统提及", "仅提到地面验收/基层处理，未写基层验收指标。"
+
+    if name == "水沟交接顺序":
+        exact = re.search(r"(先[^。；]{0,40}水沟[^。；]{0,80}(成品保护|保护)?[^。；]{0,80}(再|后)[^。；]{0,60}EPDM|水沟[^。；]{0,80}成品保护[^。；]{0,80}EPDM)", text, re.I)
+        if exact:
+            return "具体覆盖", "已明确水沟先行、保护和 EPDM 后续铺装关系。"
+        if re.search(r"EPDM[^。；]{0,220}水沟", text, re.I):
+            return "未覆盖", "文本顺序更像先 EPDM 后水沟，未体现专家要求的交接顺序。"
+        if has_mention:
+            return "笼统提及", "提到水沟或 EPDM，但未写清两者交接先后和保护。"
+        return "未覆盖", "未看到水沟与 EPDM 交接控制。"
+
+    if name in {"角铁规格", "方通使用部位", "安装间距", "焊接防腐", "混凝土反坎", "抹灰厚度"}:
+        if not has_mention:
+            return "未覆盖", f"未看到{name}。"
+        if name in {"角铁规格", "安装间距", "混凝土反坎", "抹灰厚度"} and not _has_numeric_or_threshold(text):
+            return "笼统提及", f"提到{name}，但未写具体尺寸、厚度或阈值。"
+        return "具体覆盖", f"已写明{name}。"
+
+    if name == "油漆遍数":
+        if not has_mention:
+            return "未覆盖", "未看到底漆/面漆遍数。"
+        if re.search(r"(为什么|为何)", str(checkpoint.get("source_opinion", ""))):
+            rationale = re.search(
+                r"(油漆|乳胶漆|底漆|面漆)[^。；]{0,120}(耐擦洗|遮盖|公共|使用频率|观感|原因|满足)",
+                text,
+            )
+            if not rationale:
+                return "笼统提及", "写了遍数，但未说明 1 底 1 面为什么满足空间耐久和观感要求。"
+        return "具体覆盖", "已写明底漆和面漆遍数。"
+
+    if name in {"C2TE性能等级", "六面防护剂", "现场滴水检查", "3C标识", "轻质砂浆", "植筋深度/锚固", "错孔布置", "结构专业复核"}:
+        if has_mention:
+            return "具体覆盖", f"已写明{name}。"
+        return "未覆盖", f"未看到{name}。"
+
+    if not has_mention:
+        return "未覆盖", f"未看到{name}。"
+    if _has_numeric_or_threshold(text):
+        return "具体覆盖", f"已写出{name}的具体参数或验收阈值。"
+    return "笼统提及", f"仅提到{name}，还不足以直接施工或验收。"
+
+
+def _dedupe_checkpoints(checkpoints):
+    deduped = []
+    seen = set()
+    for checkpoint in checkpoints:
+        name = checkpoint["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        deduped.append(checkpoint)
+    return deduped
+
+
+def expected_checkpoints_for(opinion, work_category="", attribution=None):
+    """Return concrete control points the expert opinion is really asking us to verify."""
+    text = f"{opinion} {work_category}"
+    checkpoints = []
+    for name, triggers, aliases in SPECIFIC_CHECKPOINT_RULES:
+        if _contains_any(text, triggers):
+            checkpoints.append({"name": name, "aliases": aliases, "source": "opinion", "source_opinion": str(opinion or "")})
+
+    if checkpoints:
+        return _dedupe_checkpoints(checkpoints)
+
+    attribution = attribution or {}
+    for artifact in attribution.get("required_artifacts", [])[:4]:
+        aliases = GENERIC_ARTIFACT_ALIASES.get(artifact, (artifact,))
+        checkpoints.append({"name": artifact, "aliases": aliases, "source": "required_artifact", "source_opinion": str(opinion or "")})
+    return _dedupe_checkpoints(checkpoints)
+
+
+def _snippet_around_keywords(text, keywords, max_chars=600):
+    text = _clean_text(text)
+    if len(text) <= max_chars:
+        return text
+    lowered = text.lower()
+    positions = [
+        lowered.find(str(keyword).lower())
+        for keyword in keywords
+        if str(keyword).strip() and lowered.find(str(keyword).lower()) >= 0
+    ]
+    if not positions:
+        return text[:max_chars]
+    center = min(positions)
+    start = max(0, center - max_chars // 3)
+    end = min(len(text), start + max_chars)
+    if end - start < max_chars:
+        start = max(0, end - max_chars)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return f"{prefix}{text[start:end]}{suffix}"
+
+
+def build_expert_intent(row):
+    opinion = row.get("opinion") or row.get("source_opinion", "")
+    question = row.get("engineer_question") or primary_professional_attribution(opinion).get("engineer_question", "")
+    return f"专家在追问：{question}"
+
+
+def assess_scheme_alignment(row):
+    """Compare an expert opinion with extracted source-scheme evidence.
+
+    This is intentionally conservative. It does not try to prove compliance;
+    it records whether the current source material appears to contain the
+    control points implied by the expert's opinion.
+    """
+    evidence = row.get("scheme_evidence", []) or []
+    opinion = row.get("opinion") or row.get("source_opinion", "")
+    attribution = {
+        "required_artifacts": row.get("required_artifacts", []),
+        "review_questions": row.get("review_questions", []),
+    }
+    checkpoints = expected_checkpoints_for(opinion, row.get("work_category", ""), attribution)
+    evidence_text = " ".join(item.get("text", "") for item in evidence)
+    covered = []
+    partial = []
+    missing = []
+    checkpoint_assessments = []
+    for checkpoint in checkpoints:
+        checkpoint_status, note = _checkpoint_status(checkpoint, evidence_text)
+        checkpoint_assessments.append({
+            "name": checkpoint["name"],
+            "status": checkpoint_status,
+            "note": note,
+            "source": checkpoint.get("source", ""),
+        })
+        if checkpoint_status == "具体覆盖":
+            covered.append(checkpoint["name"])
+        elif checkpoint_status == "笼统提及":
+            partial.append(checkpoint["name"])
+        else:
+            missing.append(checkpoint["name"])
+
+    if not evidence:
+        status = "无法判断"
+        scheme_gap = "未找到可对照的原方案片段，需要先回到方案原文确认该意见的触发位置。"
+    elif not checkpoints:
+        status = "无法判断"
+        scheme_gap = "该意见缺少可机械拆解的控制点，需工程师结合原方案上下文判断。"
+    elif covered and not partial and not missing:
+        status = "已补齐"
+        scheme_gap = "当前对照到的方案证据已覆盖历史意见中的主要控制点；运行时应识别为已补齐或历史版本已修订，不能机械复述为缺陷。"
+    elif covered or partial:
+        status = "部分补齐"
+        parts = []
+        if covered:
+            parts.append(f"已具体覆盖 {'、'.join(covered)}")
+        if partial:
+            parts.append(f"仅笼统提及 {'、'.join(partial)}")
+        if missing:
+            parts.append(f"仍缺失 {'、'.join(missing)}")
+        scheme_gap = "；".join(parts) + "。"
+    else:
+        status = "仍缺失"
+        scheme_gap = f"当前方案片段未覆盖 {'、'.join(missing)}，历史意见指向的关键控制点仍需补充。"
+
+    return {
+        "alignment_status": status,
+        "covered_points": covered,
+        "partial_points": partial,
+        "missing_points": missing,
+        "checkpoint_assessments": checkpoint_assessments,
+        "scheme_gap": scheme_gap,
+        "expert_intent": build_expert_intent(row),
+        "evidence_chain": {
+            "source_opinion": opinion,
+            "scheme_evidence": evidence[:3],
+            "covered_points": covered,
+            "partial_points": partial,
+            "missing_points": missing,
+            "checkpoint_assessments": checkpoint_assessments,
+            "alignment_status": status,
+            "scheme_gap": scheme_gap,
+            "expert_intent": build_expert_intent(row),
+            "transfer_principle": row.get("generalization_rule", ""),
+        },
+    }
+
+
 def build_background(opinion, dimension, work_category):
     if dimension == "描述完整性":
         return f"{work_category}通常依赖材料规格、做法参数和验收指标来落地，缺项会导致班组按经验施工、甲方无法复核。"
@@ -645,6 +947,10 @@ def _evidence_keywords(opinion, work_category=""):
     for keyword in trigger_keywords_for(opinion, work_category=work_category):
         if keyword and keyword not in generic and len(keyword) >= 2:
             keywords.append(keyword)
+    for checkpoint in expected_checkpoints_for(opinion, work_category):
+        for alias in checkpoint["aliases"]:
+            if alias not in generic and alias not in keywords:
+                keywords.append(alias)
     for token in re.findall(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,8}", str(opinion or "")):
         if token not in generic and token not in keywords:
             keywords.append(token)
@@ -689,7 +995,7 @@ def extract_scheme_evidence(row, material_dir=DEFAULT_MATERIAL_DIR, max_snippets
             "source_file": matched_file,
             "location": line["location"],
             "matched_keywords": [kw for kw in keywords if kw.lower() in line["text"].lower()][:6],
-            "text": _clean_text(line["text"])[:600],
+            "text": _snippet_around_keywords(line["text"], keywords, max_chars=600),
             "match_score": score,
         })
     return evidence
@@ -700,6 +1006,7 @@ def enrich_rows_with_scheme_evidence(rows, material_dir=DEFAULT_MATERIAL_DIR, ma
     for row in rows:
         copy = dict(row)
         copy["scheme_evidence"] = extract_scheme_evidence(copy, material_dir=material_dir, max_snippets=max_snippets)
+        copy.update(assess_scheme_alignment(copy))
         enriched.append(copy)
     return enriched
 
@@ -766,6 +1073,20 @@ def opinion_row_to_card(row):
     trigger_keywords = trigger_keywords_for(opinion, row["project_name"], work_category)
     confidence = "高" if row.get("is_scheme_related") and trigger_keywords else "中"
     attribution = build_attribution(opinion, dimension, work_category)
+    alignment = (
+        {
+            "alignment_status": row.get("alignment_status"),
+            "covered_points": row.get("covered_points", []),
+            "partial_points": row.get("partial_points", []),
+            "missing_points": row.get("missing_points", []),
+            "checkpoint_assessments": row.get("checkpoint_assessments", []),
+            "scheme_gap": row.get("scheme_gap"),
+            "expert_intent": row.get("expert_intent"),
+            "evidence_chain": row.get("evidence_chain"),
+        }
+        if row.get("alignment_status")
+        else assess_scheme_alignment({**row, **attribution})
+    )
     return {
         "id": _hash_id("EXP", row.get("project_name"), row.get("row_index"), row.get("item_index"), opinion),
         "source_project": row.get("project_name", ""),
@@ -799,6 +1120,14 @@ def opinion_row_to_card(row):
         "fix_template": row.get("fix_template", attribution["fix_template"]),
         "standard_query": row.get("standard_query", attribution["standard_query"]),
         "scheme_evidence": row.get("scheme_evidence", []),
+        "alignment_status": alignment.get("alignment_status", "无法判断"),
+        "covered_points": alignment.get("covered_points", []),
+        "partial_points": alignment.get("partial_points", []),
+        "missing_points": alignment.get("missing_points", []),
+        "checkpoint_assessments": alignment.get("checkpoint_assessments", []),
+        "scheme_gap": alignment.get("scheme_gap", ""),
+        "expert_intent": alignment.get("expert_intent", ""),
+        "evidence_chain": alignment.get("evidence_chain", {}),
         "evidence_type": row.get("evidence_type", "专家经验"),
         "evidence_ref": row.get("evidence_ref", "历史审核经验：零星工程专家意见"),
         "extension_rules": extensions,
@@ -833,6 +1162,12 @@ def card_to_kb_rule(card):
         f"根因归因：{card.get('root_cause')}\n"
         f"忽略风险：{card.get('risk_if_ignored')}\n"
         f"泛化规则：{card.get('generalization_rule')}\n"
+        f"证据对齐状态：{card.get('alignment_status')}\n"
+        f"已覆盖控制点：{'、'.join(card.get('covered_points', []))}\n"
+        f"笼统提及控制点：{'、'.join(card.get('partial_points', []))}\n"
+        f"缺失控制点：{'、'.join(card.get('missing_points', []))}\n"
+        f"方案缺口判断：{card.get('scheme_gap')}\n"
+        f"专家真实意图：{card.get('expert_intent')}\n"
         f"复核问题：{'；'.join(card.get('review_questions', []))}\n"
         f"应补资料：{'、'.join(card.get('required_artifacts', []))}\n"
         f"方案证据：{evidence_text}\n"
@@ -851,7 +1186,8 @@ def card_to_kb_rule(card):
         "is_washed": True,
         "condensed_content": (
             f"{card.get('work_category')}｜{card.get('dimension')}｜"
-            f"{card.get('professional_attribution_label')}｜{card.get('source_opinion')}｜泛化：{card.get('generalization_rule')}"
+            f"{card.get('professional_attribution_label')}｜{card.get('alignment_status')}｜"
+            f"{card.get('source_opinion')}｜缺口：{card.get('scheme_gap')}｜泛化：{card.get('generalization_rule')}"
         )[:700],
         "ingest_time": card.get("created_at", ""),
         "source_file": "零星工程历史审核经验",
@@ -882,6 +1218,7 @@ def summarize_rows(rows):
         "professional_attributions": Counter(
             row.get("professional_attribution", "expert_engineering_judgement") for row in rows
         ),
+        "alignment_statuses": Counter(row.get("alignment_status", "无法判断") for row in rows),
         "review_intents": Counter(intent for row in rows for intent in row.get("review_intents", [])),
     }
 
@@ -899,6 +1236,9 @@ def build_methodology(rows, cards):
                 "dimension": row.get("dimension", "描述完整性"),
                 "root_cause": row.get("root_cause", ""),
                 "generalization_rule": row.get("generalization_rule", ""),
+                "alignment_status": row.get("alignment_status", "无法判断"),
+                "scheme_gap": row.get("scheme_gap", ""),
+                "partial_points": row.get("partial_points", []),
             })
         professional_code = row.get("professional_attribution", "expert_engineering_judgement")
         if len(professional_examples[professional_code]) < 6:
@@ -908,6 +1248,9 @@ def build_methodology(rows, cards):
                 "work_category": row.get("work_category", "通用零星维修"),
                 "engineer_question": row.get("engineer_question", ""),
                 "scheme_evidence": row.get("scheme_evidence", [])[:2],
+                "alignment_status": row.get("alignment_status", "无法判断"),
+                "scheme_gap": row.get("scheme_gap", ""),
+                "partial_points": row.get("partial_points", []),
             })
 
     patterns = []
@@ -958,6 +1301,7 @@ def build_methodology(rows, cards):
         ],
         "category_methods": category_methods,
         "review_intents": dict(summary["review_intents"]),
+        "alignment_statuses": dict(summary["alignment_statuses"]),
         "experience_card_count": len(cards),
     }
 
@@ -977,22 +1321,65 @@ def category_focus(category):
     return focus.get(category, ["材料参数", "施工做法", "工序顺序", "验收指标", "清单口径"])
 
 
+REPRESENTATIVE_CASE_SPECS = [
+    {
+        "case_label": "地坪/EPDM样本",
+        "hints": ("EPDM", "塑胶", "水沟", "固化"),
+        "expected_keywords": ["EPDM胶水比", "固化时间", "基层验收", "水沟", "成品保护"],
+    },
+    {
+        "case_label": "宿舍/结构改造样本",
+        "hints": ("反坎", "抹灰", "植筋", "错孔", "结构隔层"),
+        "expected_keywords": ["200mm混凝土反坎", "轻质砂浆", "植筋深度", "错位"],
+    },
+    {
+        "case_label": "户外/电梯/活动室综合改造样本",
+        "hints": ("角铁", "方通", "瓷砖胶", "防护剂", "3C", "1底1面", "电梯", "大理石"),
+        "expected_keywords": ["角铁尺寸", "方通", "瓷砖胶", "防护剂", "3C", "1底1面"],
+    },
+]
+
+
+def _project_text(rows):
+    return " ".join(
+        str(row.get(key, ""))
+        for row in rows
+        for key in ("project_name", "opinion", "work_category", "dimension")
+    )
+
+
+def select_representative_projects(rows, specs=None):
+    specs = specs or REPRESENTATIVE_CASE_SPECS
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row.get("project_name", "")].append(row)
+
+    selected = []
+    used_projects = set()
+    for spec in specs:
+        best_project = ""
+        best_score = 0
+        for project_name, project_rows in grouped.items():
+            if not project_name or project_name in used_projects:
+                continue
+            text = _project_text(project_rows)
+            score = sum(text.count(hint) for hint in spec["hints"])
+            if score > best_score:
+                best_project = project_name
+                best_score = score
+        if best_project:
+            used_projects.add(best_project)
+            selected.append((best_project, spec))
+    return selected
+
+
 def build_benchmark_cases(rows):
-    targets = {
-        "广州幸福誉花园J9-J14前游乐场塑胶地面翻新工程施工方案": [
-            "EPDM胶水比", "固化时间", "基层验收", "水沟", "成品保护"
-        ],
-        "广州里享家花园宿舍改造工程施工方案": [
-            "200mm混凝土反坎", "轻质砂浆", "植筋深度", "错位"
-        ],
-        "广州F55御金沙户外、电梯房以及活动室改造工程施工方案": [
-            "角铁尺寸", "方通", "瓷砖胶", "防护剂", "3C", "1底1面"
-        ],
-    }
     cases = []
-    for target, expected in targets.items():
+    for target, spec in select_representative_projects(rows):
+        expected = spec["expected_keywords"]
         related = [row for row in rows if row["project_name"] == target]
         cases.append({
+            "case_label": spec["case_label"],
             "project_name": target,
             "expected_keywords": expected,
             "source_opinions": [row["opinion"] for row in related],
@@ -1021,6 +1408,14 @@ def build_deep_attribution_cases(rows, max_per_category=8):
             "review_questions": row.get("review_questions", []),
             "required_artifacts": row.get("required_artifacts", []),
             "scheme_evidence": row.get("scheme_evidence", []),
+            "alignment_status": row.get("alignment_status", "无法判断"),
+            "covered_points": row.get("covered_points", []),
+            "partial_points": row.get("partial_points", []),
+            "missing_points": row.get("missing_points", []),
+            "checkpoint_assessments": row.get("checkpoint_assessments", []),
+            "scheme_gap": row.get("scheme_gap", ""),
+            "expert_intent": row.get("expert_intent", ""),
+            "evidence_chain": row.get("evidence_chain", {}),
         })
     return {
         "version": "2026-04-30.deep_attribution",
@@ -1036,16 +1431,109 @@ def build_deep_attribution_cases(rows, max_per_category=8):
     }
 
 
+def build_alignment_cases(rows):
+    cases = []
+    for target, spec in select_representative_projects(rows):
+        related = [row for row in rows if row.get("project_name") == target]
+        items = []
+        for row in related:
+            alignment = row if row.get("alignment_status") else {**row, **assess_scheme_alignment(row)}
+            items.append({
+                "source_item": row.get("item_index"),
+                "opinion": row.get("opinion", ""),
+                "dimension": row.get("dimension", ""),
+                "work_category": row.get("work_category", ""),
+                "professional_attribution_label": row.get("professional_attribution_label", ""),
+                "expert_intent": alignment.get("expert_intent", ""),
+                "alignment_status": alignment.get("alignment_status", "无法判断"),
+                "covered_points": alignment.get("covered_points", []),
+                "partial_points": alignment.get("partial_points", []),
+                "missing_points": alignment.get("missing_points", []),
+                "checkpoint_assessments": alignment.get("checkpoint_assessments", []),
+                "scheme_gap": alignment.get("scheme_gap", ""),
+                "scheme_evidence": row.get("scheme_evidence", [])[:3],
+                "review_questions": row.get("review_questions", []),
+                "required_artifacts": row.get("required_artifacts", []),
+                "generalization_rule": row.get("generalization_rule", ""),
+                "risk_if_ignored": row.get("risk_if_ignored", ""),
+            })
+        cases.append({
+            "case_label": spec["case_label"],
+            "project_name": target,
+            "items": items,
+            "status_distribution": dict(Counter(item["alignment_status"] for item in items)),
+        })
+    return {
+        "version": "2026-04-30.deep_alignment",
+        "method": "逐条审核意见对照原方案证据，记录已覆盖/缺失控制点，再提炼专家追问和可迁移规则。",
+        "cases": cases,
+    }
+
+
+def render_deep_alignment_report(alignment_cases):
+    lines = [
+        "# 原始方案-审核意见深度对照报告",
+        "",
+        "## 阅读方式",
+        "- 每条意见都按 `原意见 -> 原方案证据 -> 对齐状态 -> 专家真实追问 -> 缺口原因 -> 泛化规则` 展开。",
+        "- `已补齐` 不代表历史意见无价值，而是说明当前留存方案可能已经按意见修订；系统运行时不能机械复述。",
+        "- `部分补齐/仍缺失` 才是更适合转化为运行期检查清单的经验。",
+        "",
+    ]
+    for case in alignment_cases.get("cases", []):
+        lines += [
+            f"## {case.get('project_name')}",
+            f"- 对齐状态分布：{json.dumps(case.get('status_distribution', {}), ensure_ascii=False)}",
+            "",
+        ]
+        for item in case.get("items", []):
+            lines += [
+                f"### {item.get('source_item')}. {item.get('opinion')}",
+                f"- 维度/类别：{item.get('dimension')}｜{item.get('work_category')}｜{item.get('professional_attribution_label')}",
+                f"- 对齐状态：{item.get('alignment_status')}",
+                f"- 具体覆盖控制点：{'、'.join(item.get('covered_points', [])) or '未识别'}",
+                f"- 笼统提及控制点：{'、'.join(item.get('partial_points', [])) or '未识别'}",
+                f"- 缺失控制点：{'、'.join(item.get('missing_points', [])) or '未识别'}",
+                f"- 专家真实意图：{item.get('expert_intent')}",
+                f"- 缺口原因：{item.get('scheme_gap')}",
+                f"- 忽略风险：{item.get('risk_if_ignored')}",
+                f"- 泛化规则：{item.get('generalization_rule')}",
+                "- 控制点判断：",
+            ]
+            assessments = item.get("checkpoint_assessments", [])
+            if assessments:
+                for assessment in assessments:
+                    lines.append(
+                        f"  - {assessment.get('name')}：{assessment.get('status')}，{assessment.get('note')}"
+                    )
+            else:
+                lines.append("  - 未形成可拆解控制点")
+            lines += [
+                "- 原方案证据：",
+            ]
+            evidence = item.get("scheme_evidence", [])
+            if evidence:
+                for snippet in evidence:
+                    lines.append(f"  - {snippet.get('location')}：{snippet.get('text')}")
+            else:
+                lines.append("  - 未匹配到可对照片段")
+            lines.append("")
+    return "\n".join(lines)
+
+
 def write_analysis_outputs(rows, cards, output_dir=ANALYSIS_DIR):
     os.makedirs(output_dir, exist_ok=True)
     summary = summarize_rows(rows)
     benchmark_cases = build_benchmark_cases(rows)
     methodology = build_methodology(rows, cards)
     deep_cases = build_deep_attribution_cases(rows)
+    alignment_cases = build_alignment_cases(rows)
     cards_path = os.path.join(output_dir, "review_experience_cards.json")
     benchmark_path = os.path.join(output_dir, "review_benchmark_cases.json")
     methodology_path = os.path.join(output_dir, "review_methodology.json")
     deep_cases_path = os.path.join(output_dir, "review_deep_attribution_cases.json")
+    alignment_cases_path = os.path.join(output_dir, "review_alignment_cases.json")
+    alignment_report_path = os.path.join(output_dir, "deep_alignment_benchmark_report.md")
     report_path = os.path.join(output_dir, "raw_material_review_report.md")
 
     with open(cards_path, "w", encoding="utf-8") as f:
@@ -1056,6 +1544,10 @@ def write_analysis_outputs(rows, cards, output_dir=ANALYSIS_DIR):
         json.dump(methodology, f, ensure_ascii=False, indent=2)
     with open(deep_cases_path, "w", encoding="utf-8") as f:
         json.dump(deep_cases, f, ensure_ascii=False, indent=2)
+    with open(alignment_cases_path, "w", encoding="utf-8") as f:
+        json.dump(alignment_cases, f, ensure_ascii=False, indent=2)
+    with open(alignment_report_path, "w", encoding="utf-8") as f:
+        f.write(render_deep_alignment_report(alignment_cases))
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(render_analysis_report(rows, cards, summary, benchmark_cases, methodology))
     return {
@@ -1064,6 +1556,8 @@ def write_analysis_outputs(rows, cards, output_dir=ANALYSIS_DIR):
         "benchmark_path": benchmark_path,
         "methodology_path": methodology_path,
         "deep_cases_path": deep_cases_path,
+        "alignment_cases_path": alignment_cases_path,
+        "alignment_report_path": alignment_report_path,
     }
 
 
@@ -1109,6 +1603,9 @@ def render_analysis_report(rows, cards, summary, benchmark_cases, methodology=No
             for k, v in summary["professional_attributions"].items()
         })),
         "",
+        "### 原方案证据对齐状态",
+        _counter_lines(summary["alignment_statuses"]),
+        "",
         "### 审核意图分布",
         _counter_lines(summary["review_intents"]),
         "",
@@ -1130,7 +1627,12 @@ def render_analysis_report(rows, cards, summary, benchmark_cases, methodology=No
             for example in item.get("examples", [])[:3]:
                 evidence = example.get("scheme_evidence", [])
                 evidence_text = f"｜方案证据：{evidence[0]['location']} {evidence[0]['text'][:120]}" if evidence else ""
-                lines.append(f"- {example['project_name']}｜{example['opinion']}｜工程师追问：{example.get('engineer_question', '')}{evidence_text}")
+                lines.append(
+                    f"- {example['project_name']}｜{example['opinion']}｜"
+                    f"状态：{example.get('alignment_status', '无法判断')}｜"
+                    f"工程师追问：{example.get('engineer_question', '')}｜"
+                    f"缺口：{example.get('scheme_gap', '')}{evidence_text}"
+                )
         for pattern in methodology.get("problem_patterns", [])[:8]:
             lines += [
                 "",

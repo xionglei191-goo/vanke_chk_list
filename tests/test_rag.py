@@ -21,15 +21,21 @@ from llm.cache import build_cache_key, get_cached_text, store_cached_text
 from llm.client import _parse_streaming_response, _to_anthropic_payload
 from rag_engine.kb_quality import assess_rule_quality
 from rag_engine.review_experience import (
+    assess_scheme_alignment,
     build_methodology,
     classify_dimension,
     classify_professional_attributions,
     classify_problem_patterns,
+    expected_checkpoints_for,
     opinion_row_to_card,
     split_opinion_items,
 )
 from rag_engine.wbs_classifier import classify_wbs
-from auditors.repair_scheme_engine import run_repair_pipeline
+from auditors.repair_scheme_engine import (
+    _align_experience_cards_to_current_scheme,
+    _experience_issues_from_cards,
+    run_repair_pipeline,
+)
 from utils.cost_controls import rag_rerank_mode, triage_mode
 from utils.paths import app_relative_path, resolve_runtime_path
 from build_tree_index import (
@@ -492,7 +498,7 @@ def run_tests():
     professional = classify_professional_attributions(items[0])
     assert professional[0]["code"] == "material_system_parameters"
     card = opinion_row_to_card({
-        "project_name": "广州幸福誉花园J9-J14前游乐场塑胶地面翻新工程施工方案",
+        "project_name": "地坪翻新样例施工方案",
         "engineer": "何文健",
         "row_index": 5,
         "item_index": 1,
@@ -505,6 +511,11 @@ def run_tests():
         "evidence_type": "专家经验",
         "evidence_ref": "历史审核经验：零星工程专家意见",
         "is_scheme_related": True,
+        "scheme_evidence": [{
+            "source_file": "sample.xlsx",
+            "location": "施工方案 第10行",
+            "text": "EPDM底层橡胶颗粒铺设，面层EPDM颗粒铺设，固化养护后开放使用。",
+        }],
     })
     assert card["dimension"] == "描述完整性"
     assert "EPDM" in card["trigger_keywords"]
@@ -514,6 +525,14 @@ def run_tests():
     assert card["engineer_question"]
     assert "指导施工" in card["review_intents"]
     assert card["generalization_rule"]
+    assert card["alignment_status"] == "部分补齐"
+    assert "固化/养护时间" in card["partial_points"]
+    assert "胶水配比" in card["missing_points"]
+    assert card["checkpoint_assessments"]
+    assert "专家在追问" in card["expert_intent"]
+    assert expected_checkpoints_for(items[0], "地坪/EPDM/环氧")[0]["name"] == "胶水配比"
+    alignment = assess_scheme_alignment(card)
+    assert alignment["alignment_status"] == "部分补齐"
     methodology = build_methodology([{
         "project_name": card["source_project"],
         "opinion": card["source_opinion"],
@@ -523,8 +542,33 @@ def run_tests():
         "review_intents": card["review_intents"],
         "root_cause": card["root_cause"],
         "generalization_rule": card["generalization_rule"],
+        "alignment_status": card["alignment_status"],
+        "scheme_gap": card["scheme_gap"],
     }], [card])
     assert methodology["problem_patterns"][0]["code"] == "missing_parameter"
+    assert methodology["alignment_statuses"]["部分补齐"] == 1
+    experience_issues = _experience_issues_from_cards([card])
+    assert experience_issues
+    assert "控制点判断" in experience_issues[0]["result"]
+    assert "固化/养护时间：笼统提及" in experience_issues[0]["result"]
+    assert "胶水配比：未覆盖" in experience_issues[0]["result"]
+    assert "建议补写到方案" in experience_issues[0]["result"]
+    assert "EPDM胶粘剂应写明品牌/型号及配比要求" in experience_issues[0]["result"]
+    assert "开放使用条件" in experience_issues[0]["result"]
+    assert experience_issues[0]["partial_points"] == ["固化/养护时间"]
+    assert "胶水配比" in experience_issues[0]["missing_points"]
+    source_completed_card = dict(card)
+    source_completed_card["alignment_status"] = "已补齐"
+    runtime_cards = _align_experience_cards_to_current_scheme(
+        [source_completed_card],
+        "施工范围 | 新EPDM地垫铺设。\n施工工序 | EPDM底层橡胶颗粒铺设，面层EPDM颗粒铺设，固化养护。",
+    )
+    assert runtime_cards[0]["source_alignment_status"] == "已补齐"
+    assert runtime_cards[0]["alignment_basis"] == "current_scheme"
+    assert runtime_cards[0]["alignment_status"] == "部分补齐"
+    runtime_issues = _experience_issues_from_cards(runtime_cards)
+    assert runtime_issues
+    assert "胶水配比" in runtime_issues[0]["result"]
     print("✅ 零星工程审核意见结构化测试通过！\n")
 
     # 测试16：v2 repair 引擎应围绕分项工程输出可修改意见
@@ -547,7 +591,7 @@ def run_tests():
                 "text": "施工范围 | 卫生间轻质砖隔墙砌筑，墙面抹灰，混凝土结构隔层施工。",
             },
             {
-                "heading": "御金沙改造",
+                "heading": "户外电梯活动室改造",
                 "text": (
                     "施工范围 | 户外楼梯防腐木地板拆除及塑木地板安装。"
                     "电梯地板更换为大理石铺贴，钢化玻璃更换，D2活动室油漆1底1面。"

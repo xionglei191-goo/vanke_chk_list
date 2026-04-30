@@ -58,7 +58,9 @@ REVIEW_EXPERIENCE_ENABLED=true
 COST_REVIEW_MODE=explicit
 REPAIR_AI_REVIEW_ENABLED=true
 REPAIR_TOOL_QUERY_LIMIT=4
-REPAIR_CROSS_PROJECT_EXPERIENCE=false
+REPAIR_CROSS_PROJECT_EXPERIENCE=true
+REPAIR_CROSS_PROJECT_MIN_OVERLAP=2
+REPAIR_CROSS_PROJECT_MATCH_LIMIT=4
 REPAIR_EXPERIENCE_MATCH_LIMIT=8
 INCLUDE_EXPERIENCE_IN_STANDARD_RAG=false
 LLM_THINKING_ENABLED=true
@@ -72,7 +74,7 @@ LLM_REASONING_EFFORT=medium
 - 模型异常响应短缓存 10 分钟，避免超时期间反复扣费。
 - v2 零星工程引擎默认本地匹配历史经验、主动查询规范片段，然后只做一次 AI 归因泛化判断。
 - `COST_REVIEW_MODE=explicit` 表示只有明确上传报价/清单或方案内出现清单交叉点时，才触发方案清单一致性检查。
-- `REPAIR_CROSS_PROJECT_EXPERIENCE=false` 避免不同项目经验互相误挂；稳定后可按需打开。
+- `REPAIR_CROSS_PROJECT_EXPERIENCE=true` 会启用跨项目经验泛化；`REPAIR_CROSS_PROJECT_MIN_OVERLAP=2` 要求至少命中核心工程词，`REPAIR_CROSS_PROJECT_MATCH_LIMIT=4` 限制跨项目补充数量，并会按当前方案重新判断控制点，避免照搬历史源方案结论。
 - `LLM_THINKING_ENABLED=true` 会向支持的模型传递 thinking/reasoning 参数；最终报告不会输出思维链。
 
 如果需要恢复深度审查，可临时设置：
@@ -107,6 +109,7 @@ AUDIT_ENGINE=legacy
 - `auto_review_system/data/analysis/review_benchmark_cases.json`
 - `auto_review_system/data/analysis/review_methodology.json`
 - `auto_review_system/data/analysis/review_deep_attribution_cases.json`
+- `auto_review_system/data/analysis/repair_v2_benchmark_report.md`
 
 先 dry-run 查看拆解数量和维度分布：
 
@@ -121,6 +124,14 @@ PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_
 ```
 
 该脚本会停用旧的“城市公司检查结果”整表规则，重新写入逐条 `review_experience` 经验规则，并同步 SQLite、JSON 备份和 Chroma 向量库。经验卡会保留专业归因、工程师追问、应补资料、泛化规则以及从对应方案/白单中抽取到的原文证据片段。
+
+运行 v2 零星工程基准案例：
+
+```bash
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/run_repair_benchmark.py
+```
+
+该脚本默认关闭 AI，只验证本地规则、历史经验泛化、控制点判断和补写建议，不产生大模型调用费用。脚本会从本地 ignored 的 `原始材料/` 自动发现代表样本；如需固定样本，可传入 `--cases-file auto_review_system/data/analysis/repair_benchmark_cases.local.json`。
 
 ## WBS 本地补标
 

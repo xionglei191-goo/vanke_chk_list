@@ -15,6 +15,7 @@ from auditors.engineering_auditor import call_llm, is_llm_runtime_failure
 from auditors.repair_prompts import REPAIR_REVIEW_SYSTEM_PROMPT, build_repair_review_user_prompt
 from rag_engine.review_experience import (
     CORE_DIMENSIONS,
+    assess_scheme_alignment,
     load_analysis_cards,
     match_experience_cards,
 )
@@ -37,6 +38,26 @@ SECTION_ALIASES = {
     "保修": ("保修", "保修年限", "保修期限"),
 }
 
+SOURCE_DOMAIN_TERMS = {
+    "EPDM": ("EPDM", "塑胶地面", "塑胶地垫"),
+    "硅PU": ("硅PU",),
+    "丙烯酸": ("丙烯酸",),
+    "环氧": ("环氧",),
+    "自流平": ("自流平",),
+    "钢化玻璃": ("钢化玻璃", "玻璃更换", "破损玻璃"),
+    "大理石": ("大理石", "石材"),
+    "植筋": ("植筋", "后加板", "结构隔层", "混凝土结构"),
+    "轻质砖": ("轻质砖", "隔墙"),
+    "防火门": ("防火门",),
+    "C2TE": ("电梯", "瓷砖", "大理石", "石材"),
+}
+
+ISSUE_DOMAIN_TERMS = (
+    "EPDM", "水沟", "植筋", "反坎", "钢化玻璃", "大理石", "石材", "C2TE", "瓷砖",
+    "角铁", "方通", "油漆", "乳胶漆", "腻子", "抹灰", "防火门", "防水",
+)
+COST_OR_MEASURE_HINT = re.compile(r"措施费|报价|白单|清单|对下|结算|计量|工程量")
+
 
 def _compact(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
@@ -49,6 +70,24 @@ def _contains(text, *keywords):
 
 def _missing_any(text, keywords):
     return [keyword for keyword in keywords if not _contains(text, keyword)]
+
+
+def _domain_matches_current_scheme(card, text):
+    source = str(card.get("source_opinion", ""))
+    current = str(text or "")
+    for term, current_aliases in SOURCE_DOMAIN_TERMS.items():
+        if term.lower() in source.lower() and not _contains(current, *current_aliases):
+            return False
+    return True
+
+
+def _tag_cards(cards, match_scope):
+    tagged = []
+    for card in cards or []:
+        copied = dict(card)
+        copied["match_scope"] = match_scope
+        tagged.append(copied)
+    return tagged
 
 
 def _section_type(text):
@@ -119,10 +158,47 @@ def _merge_short_sections(sections):
     return merged
 
 
-def _issue(work_item, dimension, finding, reason, recommendation, evidence_type="专家经验", evidence_ref="历史审核经验：零星工程专家意见", confidence="高"):
+def _format_checkpoint_assessments(checkpoint_assessments):
+    lines = []
+    for item in checkpoint_assessments or []:
+        name = _compact(item.get("name", ""))
+        status = _compact(item.get("status", ""))
+        note = _compact(item.get("note", ""))
+        if not name or not status:
+            continue
+        line = f"- {name}：{status}"
+        if note:
+            line += f"，{note}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _issue(
+    work_item,
+    dimension,
+    finding,
+    reason,
+    recommendation,
+    evidence_type="专家经验",
+    evidence_ref="历史审核经验：零星工程专家意见",
+    confidence="高",
+    checkpoint_assessments=None,
+    covered_points=None,
+    partial_points=None,
+    missing_points=None,
+    alignment_status="",
+):
+    checkpoint_text = _format_checkpoint_assessments(checkpoint_assessments)
+    control_block = ""
+    if checkpoint_text:
+        control_block = (
+            f"**控制点判断**：\n{checkpoint_text}\n"
+            f"**对齐状态**：{alignment_status or '部分补齐/需复核'}\n"
+        )
     result = (
         f"**问题**：{finding}\n"
         f"**背景/原因**：{reason}\n"
+        f"{control_block}"
         f"**依据类型**：{evidence_type}\n"
         f"**依据出处**：{evidence_ref}\n"
         f"**修改建议**：{recommendation}\n"
@@ -140,6 +216,11 @@ def _issue(work_item, dimension, finding, reason, recommendation, evidence_type=
         "evidence_ref": evidence_ref,
         "recommendation": recommendation,
         "confidence": confidence,
+        "checkpoint_assessments": checkpoint_assessments or [],
+        "covered_points": covered_points or [],
+        "partial_points": partial_points or [],
+        "missing_points": missing_points or [],
+        "alignment_status": alignment_status,
     }
 
 
@@ -372,21 +453,130 @@ def _matched_experience_cards(project_name, text):
     ]
     other_cards = [card for card in cards if card not in same_project_cards]
     limit = int(os.getenv("REPAIR_EXPERIENCE_MATCH_LIMIT", "8"))
-    matches = match_experience_cards(text, same_project_cards, limit=limit, min_overlap=1)
-    cross_project_enabled = os.getenv("REPAIR_CROSS_PROJECT_EXPERIENCE", "false").strip().lower() in {"1", "true", "yes"}
+    matches = _tag_cards(match_experience_cards(text, same_project_cards, limit=limit, min_overlap=1), "same_project")
+    cross_project_enabled = os.getenv("REPAIR_CROSS_PROJECT_EXPERIENCE", "true").strip().lower() in {"1", "true", "yes"}
     if cross_project_enabled and len(matches) < max(2, limit // 2):
-        matches.extend(match_experience_cards(text, other_cards, limit=max(0, limit - len(matches)), min_overlap=4))
+        min_overlap = int(os.getenv("REPAIR_CROSS_PROJECT_MIN_OVERLAP", "2"))
+        cross_limit = min(
+            max(0, limit - len(matches)),
+            int(os.getenv("REPAIR_CROSS_PROJECT_MATCH_LIMIT", "4")),
+        )
+        cross_pool = [card for card in other_cards if _domain_matches_current_scheme(card, text)]
+        matches.extend(
+            _tag_cards(
+                match_experience_cards(text, cross_pool, limit=cross_limit, min_overlap=min_overlap),
+                "cross_project",
+            )
+        )
     return matches
+
+
+def _align_experience_cards_to_current_scheme(cards, combined_text):
+    aligned_cards = []
+    for card in cards or []:
+        copied = dict(card)
+        runtime_row = dict(copied)
+        runtime_row["opinion"] = copied.get("source_opinion", "")
+        runtime_row["scheme_evidence"] = [{
+            "source_file": "当前审核方案",
+            "location": "当前方案全文",
+            "text": combined_text,
+        }]
+        alignment = assess_scheme_alignment(runtime_row)
+        if isinstance(alignment.get("evidence_chain"), dict):
+            alignment["evidence_chain"] = dict(alignment["evidence_chain"])
+            alignment["evidence_chain"]["scheme_evidence"] = []
+        copied["source_alignment_status"] = copied.get("alignment_status", "")
+        copied["source_scheme_gap"] = copied.get("scheme_gap", "")
+        copied.update(alignment)
+        copied["alignment_basis"] = "current_scheme"
+        aligned_cards.append(copied)
+    return aligned_cards
+
+
+CHECKPOINT_REWRITE_TEMPLATES = {
+    "胶水配比": "EPDM胶粘剂应写明品牌/型号及配比要求，按厂家产品技术资料或设计要求填写具体比例，现场拌合后留存配比记录，严禁随意加水或稀释。",
+    "固化/养护时间": "EPDM面层铺装完成后应按材料技术资料明确固化养护时间和开放使用条件，养护期内设置围蔽保护，未达到规定时间不得开放使用。",
+    "基层验收": "EPDM铺装前应完成基层验收，检查基层平整、干燥、清洁、无起砂空鼓及松动，验收合格并留存记录后方可进入铺装工序。",
+    "水沟交接顺序": "水沟应先完成拆除、修复、盖板安装和功能测试，验收合格后对盖板及边界进行成品保护，再铺装EPDM，交接缝应顺直、密实、无污染破坏。",
+    "倒角收口": "石凳翻新遇大倒角部位时，应在倒角下方粘贴美纹纸控制边界，涂刷完成后及时撕除，保证收口顺直、无流挂和污染。",
+    "混凝土反坎": "卫生间及其他有水房间新增轻质砖隔墙底部应设置不低于200mm高混凝土反坎，并明确反坎与地面防水层、墙面防水上翻的搭接做法。",
+    "抹灰厚度": "墙面抹灰应写明设计厚度、分层施工要求、基层拉毛或界面处理、养护和空鼓检查标准，并与白单/清单厚度口径保持一致。",
+    "轻质砂浆": "如采用薄层抹灰或厚度较小的找平做法，应说明采用轻质砂浆或适配薄抹灰体系，并明确材料强度、适用基层和防空鼓开裂措施。",
+    "植筋深度/锚固": "植筋方案应按墙、梁、柱、板等不同构件分别写明孔径、孔深、锚固长度、植筋胶型号、清孔方法和拉拔/隐蔽验收要求。",
+    "错孔布置": "同一水平线植筋孔位应错开布置，并避让原结构主筋和薄弱部位，防止在原结构上形成连续水平通缝。",
+    "结构专业复核": "后加板、隔层或结构受力改变内容应经结构专业复核后实施；如风险较高，应补充替代轻量化方案或专项结构说明。",
+    "腻子基层处理": "油漆翻新前应明确旧基层处理方式，包括铲除空鼓/粉化旧腻子、基层清理、局部修补、满刮或局部批刮腻子、打磨和除尘要求。",
+    "油漆遍数": "涂饰系统应说明底漆和面漆遍数选择原因；公共空间、活动室等高频使用部位应结合遮盖力、耐擦洗、观感和色差要求复核1底1面是否满足使用要求。",
+    "角铁规格": "户外楼梯钢骨架应写明角铁规格、壁厚、材质和使用部位，并明确其作为踏步承重或侧边固定构件的作用。",
+    "方通使用部位": "方通/方管应写明规格、壁厚、安装部位和连接方式，区分承重骨架、侧边固定和辅助支撑。",
+    "安装间距": "钢骨架、方通或龙骨应写明安装间距和允许偏差，间距应满足塑木地板固定、承载和变形控制要求。",
+    "焊接防腐": "焊接完成后应清除焊渣并检查无虚焊、漏焊，钢构件和焊缝部位应按防锈底漆加面漆或同等防腐体系处理，经隐蔽验收后再安装面层。",
+    "C2TE性能等级": "电梯或振动区域石材/瓷砖铺贴应明确采用C2TE及以上等级专用瓷砖胶或同等性能胶粘体系，并提供产品合格资料。",
+    "专用瓷砖胶/粘结剂": "石材/瓷砖铺贴应写明专用胶粘剂名称、适用基层、涂抹厚度、开放时间和压实要求，避免套用普通水泥砂浆干铺或湿铺。",
+    "禁止干铺": "电梯地面、大规格砖或振动区域不得采用干铺法，应采用适配胶粘体系薄层铺贴，并明确基层清理、找平和空鼓检查要求。",
+    "六面防护剂": "天然石材进场及铺贴前应检查六面防护处理，重点核查背面和侧边；未做防护或防护无效的石材不得铺贴。",
+    "现场滴水检查": "石材防护效果可采用现场滴水抽查，水珠不被迅速吸收且能滚落时方可视为防护有效，并保留抽查记录。",
+    "3C标识": "钢化玻璃或夹胶安全玻璃进场时应逐块检查玻璃表面3C/CCC标识，并核对厚度、规格、检测报告和合格证明与方案一致。",
+}
+
+
+def _rewrite_suggestions_for_checkpoints(checkpoint_assessments):
+    suggestions = []
+    seen = set()
+    for item in checkpoint_assessments or []:
+        if item.get("status") == "具体覆盖":
+            continue
+        name = _compact(item.get("name", ""))
+        suggestion = CHECKPOINT_REWRITE_TEMPLATES.get(name)
+        if suggestion and suggestion not in seen:
+            seen.add(suggestion)
+            suggestions.append(suggestion)
+    return suggestions
+
+
+def _build_recommendation_from_card(card, base_recommendation):
+    checkpoint_suggestions = _rewrite_suggestions_for_checkpoints(card.get("checkpoint_assessments", []))
+    partial_points = card.get("partial_points", [])
+    missing_points = card.get("missing_points", [])
+    focus_points = []
+    if partial_points:
+        focus_points.append(f"将笼统表述具体化：{'、'.join(partial_points)}")
+    if missing_points:
+        focus_points.append(f"补充缺失项：{'、'.join(missing_points)}")
+
+    parts = []
+    if focus_points:
+        parts.append(f"{'；'.join(focus_points)}。")
+    if checkpoint_suggestions:
+        lines = "\n".join(f"- {suggestion}" for suggestion in checkpoint_suggestions)
+        parts.append(f"建议补写到方案：\n{lines}")
+    if base_recommendation:
+        parts.append(f"补充原则：{base_recommendation}")
+    return "\n".join(parts) if parts else base_recommendation
 
 
 def _experience_issues_from_cards(cards):
     issues = []
     for card in cards:
+        if card.get("alignment_status") == "已补齐":
+            continue
+        source_opinion = card.get("source_opinion", "")
+        if card.get("match_scope") == "cross_project":
+            if COST_OR_MEASURE_HINT.search(source_opinion):
+                continue
+            if not _rewrite_suggestions_for_checkpoints(card.get("checkpoint_assessments", [])):
+                continue
         dimension = card.get("dimension") if card.get("dimension") in CORE_DIMENSIONS else "描述完整性"
         work_item = card.get("work_category") or "历史经验匹配"
         extension = "；".join(rule.get("rule", "") for rule in card.get("extension_rules", []) if rule.get("rule"))
+        partial_points = card.get("partial_points", [])
+        missing_points = card.get("missing_points", [])
+        base_recommendation = card.get("fix_template") or extension or "结合当前方案补充材料参数、施工做法、工序顺序和验收指标。"
+        recommendation = _build_recommendation_from_card(card, base_recommendation)
         reason_parts = [
-            card.get("engineer_question", ""),
+            card.get("expert_intent", ""),
+            card.get("scheme_gap", ""),
             card.get("reason") or card.get("background") or "该问题来自历史专家审核意见，当前方案出现相似触发场景。",
             card.get("root_cause", ""),
             card.get("risk_if_ignored", ""),
@@ -395,18 +585,24 @@ def _experience_issues_from_cards(cards):
             issues,
             work_item,
             dimension,
-            card.get("source_opinion", "历史审核经验命中"),
+            source_opinion or "历史审核经验命中",
             " ".join(part for part in reason_parts if part),
-            card.get("fix_template") or extension or "结合当前方案补充材料参数、施工做法、工序顺序和验收指标。",
+            recommendation,
             evidence_type=card.get("evidence_type", "专家经验"),
             evidence_ref=card.get("evidence_ref", "历史审核经验：零星工程专家意见"),
             confidence=card.get("confidence", "中"),
+            checkpoint_assessments=card.get("checkpoint_assessments", []),
+            covered_points=card.get("covered_points", []),
+            partial_points=partial_points,
+            missing_points=missing_points,
+            alignment_status=card.get("alignment_status", ""),
         )
     return issues
 
 
 def _experience_issues(project_name, text):
-    return _experience_issues_from_cards(_matched_experience_cards(project_name, text))
+    cards = _align_experience_cards_to_current_scheme(_matched_experience_cards(project_name, text), text)
+    return _experience_issues_from_cards(cards)
 
 
 def _dedupe_issues(issues):
@@ -423,6 +619,27 @@ def _dedupe_issues(issues):
         seen.add(key)
         deduped.append(issue)
     return deduped
+
+
+def _issue_domain_terms(issue):
+    text = " ".join(str(issue.get(key, "")) for key in ("work_item", "finding", "recommendation"))
+    return {term for term in ISSUE_DOMAIN_TERMS if term.lower() in text.lower()}
+
+
+def _prefer_control_point_issues(issues):
+    detailed_terms = set()
+    for issue in issues:
+        if issue.get("checkpoint_assessments"):
+            detailed_terms.update(_issue_domain_terms(issue))
+    if not detailed_terms:
+        return issues
+
+    filtered = []
+    for issue in issues:
+        if not issue.get("checkpoint_assessments") and (_issue_domain_terms(issue) & detailed_terms):
+            continue
+        filtered.append(issue)
+    return filtered
 
 
 def _group_issues(issues):
@@ -584,7 +801,10 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
         return {}
 
     local_issues = _local_rule_issues(combined_text)
-    experience_cards = _matched_experience_cards(project_name, combined_text)
+    experience_cards = _align_experience_cards_to_current_scheme(
+        _matched_experience_cards(project_name, combined_text),
+        combined_text,
+    )
     experience_issues = _experience_issues_from_cards(experience_cards)
 
     issues = []
@@ -612,6 +832,7 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
                 evidence_type="专家经验",
             )
 
+    issues = _prefer_control_point_issues(issues)
     issues = _dedupe_issues(issues)
     if progress_callback:
         progress_callback(f"✅ v2零星工程审核：生成 {len(issues)} 条分项问题。", 0.95)

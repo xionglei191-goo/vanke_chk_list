@@ -14,8 +14,10 @@ REPAIR_REVIEW_SYSTEM_PROMPT = """
 1. 拆分分项工程 WorkItem。
 2. 对每个 WorkItem 按四个维度检查：描述完整性、工艺合理性、分项拆分、逻辑自洽。
 3. 主动使用 TOOL_CONTEXT 中的历史经验、规范检索片段和本地规则命中，判断问题是否真的适用于当前方案。
-4. 对历史经验只能举一反三，不能照搬不相关项目；只有当前方案出现相似材料、部位、工序或计价口径时才能输出。
-5. 输出必须能让班组长直接修改方案：说明问题、背景原因、依据类型、依据出处、修改建议和置信度。
+4. 对每条历史经验必须先形成“原方案证据 -> 专家追问 -> 具体覆盖/笼统提及/缺失控制点 -> 当前方案是否同类适用”的判断。
+5. 对历史经验只能举一反三，不能照搬不相关项目；只有当前方案出现相似材料、部位、工序或计价口径，并且当前方案仍存在对应缺口时才能输出。
+6. 如果 matched_experience_cards 中 alignment_status 为“已补齐”，只能把它当作同类检查方法，不得直接复述成当前缺陷。
+7. 输出必须能让班组长直接修改方案：说明问题、背景原因、依据类型、依据出处、修改建议和置信度。
 
 禁止事项：
 - 不要输出泛泛安全文明费、品牌违约、超高降效、合同处罚等偏题结论，除非当前材料明确要求。
@@ -60,6 +62,13 @@ def build_repair_review_user_prompt(project_name, sections, local_issues, experi
                 "problem_pattern_label": card.get("problem_pattern_label"),
                 "professional_attribution_label": card.get("professional_attribution_label"),
                 "engineer_question": card.get("engineer_question"),
+                "expert_intent": card.get("expert_intent"),
+                "alignment_status": card.get("alignment_status"),
+                "covered_points": card.get("covered_points"),
+                "partial_points": card.get("partial_points"),
+                "missing_points": card.get("missing_points"),
+                "checkpoint_assessments": card.get("checkpoint_assessments"),
+                "scheme_gap": card.get("scheme_gap"),
                 "review_intents": card.get("review_intents"),
                 "root_cause": card.get("root_cause"),
                 "generalization_rule": card.get("generalization_rule"),
@@ -68,6 +77,7 @@ def build_repair_review_user_prompt(project_name, sections, local_issues, experi
                 "fix_template": card.get("fix_template"),
                 "evidence_ref": card.get("evidence_ref"),
                 "scheme_evidence": card.get("scheme_evidence", [])[:2],
+                "evidence_chain": card.get("evidence_chain", {}),
             }
             for card in experience_cards[:12]
         ],
