@@ -39,6 +39,7 @@ from auditors.repair_scheme_engine import (
     _complexity_score,
     _dedupe_issues,
     _experience_issues_from_cards,
+    _work_item_from_card,
     run_repair_pipeline,
 )
 from utils.cost_controls import rag_rerank_mode, triage_mode
@@ -574,6 +575,14 @@ def run_tests():
     runtime_issues = _experience_issues_from_cards(runtime_cards)
     assert runtime_issues
     assert "胶水配比" in runtime_issues[0]["result"]
+    water_card = dict(card)
+    water_card["source_opinion"] = "水沟与EPDM交接部位需重点明确，可采取先修复水沟后做好成品保护再铺装EPDM"
+    water_card["work_category"] = "地坪/EPDM/环氧"
+    assert _work_item_from_card(water_card) == "水沟与EPDM交接"
+    epdm_card = dict(card)
+    epdm_card["source_opinion"] = "EPDM胶水比、固化时间、基层验收要求未明确"
+    epdm_card["work_category"] = "地坪/EPDM/环氧"
+    assert _work_item_from_card(epdm_card) == "EPDM塑胶地面"
     generic_cross_card = {
         "source_project": "历史防火门维修项目",
         "source_opinion": "防火门更换方案未明确认证标志和允许偏差/验收指标。",
@@ -629,6 +638,28 @@ def run_tests():
         "origin": "ai_final",
     }
     assert _dedupe_issues([duplicate_local, duplicate_ai]) == [duplicate_local]
+    epdm_controls = {
+        "work_item": "EPDM塑胶地面",
+        "dimension": "描述完整性",
+        "finding": "EPDM胶水配比与固化时间仅笼统提及。",
+        "reason": "涉及EPDM工序、固化和养护。",
+        "recommendation": "补充胶水配比、固化时间和开放使用条件。",
+        "checkpoint_assessments": [
+            {"name": "胶水配比", "status": "笼统提及"},
+            {"name": "固化/养护时间", "status": "笼统提及"},
+        ],
+    }
+    gutter_controls = {
+        "work_item": "水沟与EPDM交接",
+        "dimension": "逻辑自洽",
+        "finding": "水沟与EPDM交接顺序未写清。",
+        "reason": "同样涉及EPDM工序和成品保护，但控制点不同。",
+        "recommendation": "明确先修复水沟并保护后再铺装EPDM。",
+        "checkpoint_assessments": [
+            {"name": "水沟交接顺序", "status": "未覆盖"},
+        ],
+    }
+    assert _dedupe_issues([epdm_controls, gutter_controls]) == [epdm_controls, gutter_controls]
     print("✅ 零星工程审核意见结构化测试通过！\n")
 
     # 测试16：v2 repair 引擎应围绕分项工程输出可修改意见

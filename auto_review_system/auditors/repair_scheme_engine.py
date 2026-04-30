@@ -717,6 +717,37 @@ def _build_recommendation_from_card(card, base_recommendation):
     return "\n".join(parts) if parts else base_recommendation
 
 
+def _work_item_from_card(card):
+    source = _compact(card.get("source_opinion", ""))
+    if source:
+        split_positions = [
+            pos for marker in ("：", ":", "需", "未", "应", "为什么", "怎么", "如何", "，", "；")
+            for pos in [source.find(marker)]
+            if pos > 0
+        ]
+        if split_positions:
+            subject = source[:min(split_positions)]
+            subject = re.sub(r"^[0-9一二三四五六七八九十]+[、.)）]\s*", "", subject)
+            subject = re.sub(r"(存在|出现|发生).*$", "", subject)
+            subject = re.sub(r"(部位|要求|方案|施工)$", "", subject)
+            subject = subject.strip(" ，。；:：")
+            if (
+                2 <= len(subject) <= 18
+                and "、" not in subject
+                and not any(token in subject for token in ("同上", "明确", "检查", "复核"))
+            ):
+                return subject
+    category = card.get("work_category") or ""
+    if category == "地坪/EPDM/环氧":
+        if "EPDM" in source:
+            return "EPDM塑胶地面"
+        if "自流平" in source:
+            return "自流平地坪"
+        if "环氧" in source:
+            return "环氧地坪"
+    return category or "历史经验匹配"
+
+
 def _experience_issues_from_cards(cards):
     issues = []
     for card in cards:
@@ -733,7 +764,7 @@ def _experience_issues_from_cards(cards):
             if not _rewrite_suggestions_for_checkpoints(card.get("checkpoint_assessments", [])):
                 continue
         dimension = card.get("dimension") if card.get("dimension") in CORE_DIMENSIONS else "描述完整性"
-        work_item = card.get("work_category") or "历史经验匹配"
+        work_item = _work_item_from_card(card)
         extension = "；".join(rule.get("rule", "") for rule in card.get("extension_rules", []) if rule.get("rule"))
         partial_points = card.get("partial_points", [])
         missing_points = card.get("missing_points", [])
@@ -796,6 +827,16 @@ def _issue_duplicate_terms(issue):
     return {term for term in DUPLICATE_HINT_TERMS if term.lower() in text.lower()}
 
 
+def _issue_checkpoint_names(issue):
+    names = set()
+    for item in issue.get("checkpoint_assessments") or []:
+        name = _compact(item.get("name", ""))
+        status = item.get("status", "")
+        if name and status != "具体覆盖":
+            names.add(name)
+    return names
+
+
 def _is_semantic_duplicate(existing, candidate):
     existing_text = re.sub(r"\W+", "", existing.get("finding", ""))
     candidate_text = re.sub(r"\W+", "", candidate.get("finding", ""))
@@ -808,6 +849,11 @@ def _is_semantic_duplicate(existing, candidate):
     candidate_terms = _issue_duplicate_terms(candidate)
     overlap = existing_terms & candidate_terms
     if len(overlap) < 2:
+        return False
+
+    existing_checkpoints = _issue_checkpoint_names(existing)
+    candidate_checkpoints = _issue_checkpoint_names(candidate)
+    if existing_checkpoints and candidate_checkpoints and not (existing_checkpoints & candidate_checkpoints):
         return False
 
     candidate_origin = str(candidate.get("origin", ""))
