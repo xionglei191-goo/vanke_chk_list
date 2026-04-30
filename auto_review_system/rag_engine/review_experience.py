@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import csv
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -894,6 +895,82 @@ def match_material_file(project_name, files):
     return files[idx]
 
 
+def _resolve_source_path(raw_path, material_dir=DEFAULT_MATERIAL_DIR):
+    raw_path = str(raw_path or "").strip()
+    if not raw_path:
+        return None
+    expanded = os.path.expanduser(raw_path)
+    candidates = []
+    path = Path(expanded)
+    if path.is_absolute():
+        candidates.append(path)
+    else:
+        candidates.extend([
+            Path(material_dir) / path,
+            Path(PROJECT_DIR) / path,
+            Path.cwd() / path,
+        ])
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def load_source_manifest(manifest_file=None, material_dir=DEFAULT_MATERIAL_DIR):
+    """Load optional project -> original source file mapping.
+
+    The expected local CSV columns are project_name and user_supplied_path.
+    JSON is also accepted as either {project_name: path} or a list of records.
+    Missing files are ignored so a partially filled manifest can be reused.
+    """
+    manifest_file = str(manifest_file or "").strip()
+    if not manifest_file:
+        return {}
+    path = Path(os.path.expanduser(manifest_file))
+    if not path.is_absolute():
+        path = Path(PROJECT_DIR) / path
+    if not path.exists():
+        return {}
+
+    mappings = {}
+
+    def add_mapping(project_name, source_path):
+        project_name = _clean_text(project_name)
+        resolved = _resolve_source_path(source_path, material_dir=material_dir)
+        if project_name and resolved:
+            mappings[project_name] = resolved
+
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            for project_name, source_path in payload.items():
+                if isinstance(source_path, dict):
+                    source_path = (
+                        source_path.get("user_supplied_path")
+                        or source_path.get("source_path")
+                        or source_path.get("path")
+                    )
+                add_mapping(project_name, source_path)
+        elif isinstance(payload, list):
+            for row in payload:
+                if not isinstance(row, dict):
+                    continue
+                add_mapping(
+                    row.get("project_name"),
+                    row.get("user_supplied_path") or row.get("source_path") or row.get("path") or row.get("file_path"),
+                )
+        return mappings
+
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            add_mapping(
+                row.get("project_name"),
+                row.get("user_supplied_path") or row.get("source_path") or row.get("path") or row.get("file_path"),
+            )
+    return mappings
+
+
 _MATERIAL_TEXT_CACHE = {}
 
 
@@ -973,9 +1050,10 @@ def _is_evidence_noise(line_text, opinion):
 
 def extract_scheme_evidence(row, material_dir=DEFAULT_MATERIAL_DIR, max_snippets=3):
     matched_file = row.get("matched_file")
-    if not matched_file:
+    matched_path = row.get("matched_file_path")
+    if not matched_file and not matched_path:
         return []
-    path = Path(material_dir) / matched_file
+    path = Path(matched_path) if matched_path else Path(material_dir) / matched_file
     if not path.exists():
         return []
     lines = _material_text_lines(path)
@@ -1011,19 +1089,22 @@ def enrich_rows_with_scheme_evidence(rows, material_dir=DEFAULT_MATERIAL_DIR, ma
     return enriched
 
 
-def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MATERIAL_DIR):
+def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MATERIAL_DIR, source_manifest=None):
     from openpyxl import load_workbook
 
     wb = load_workbook(opinion_file, data_only=True)
     ws = wb.active
     files = index_material_files(material_dir)
+    source_map = load_source_manifest(source_manifest, material_dir=material_dir)
     rows = []
     for row_index, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         project_name, engineer, opinion = row[:3]
         if not project_name:
             continue
         project_name = _clean_text(project_name)
-        material_file = match_material_file(project_name, files)
+        manifest_file = source_map.get(project_name)
+        material_file = manifest_file or match_material_file(project_name, files)
+        source_match_type = "manifest" if manifest_file else ("fuzzy" if material_file else "")
         project_type = classify_project_type(project_name)
         for item_index, item in enumerate(split_opinion_items(opinion), start=1):
             work_category = infer_work_category(f"{project_name} {item}")
@@ -1038,6 +1119,8 @@ def load_opinion_rows(opinion_file=DEFAULT_OPINION_FILE, material_dir=DEFAULT_MA
                 "opinion": _clean_text(item),
                 "project_type": project_type,
                 "matched_file": material_file.name if material_file else "",
+                "matched_file_path": str(material_file) if material_file else "",
+                "source_match_type": source_match_type,
                 "file_type": material_file.suffix.lower().lstrip(".") if material_file else "",
                 "work_category": work_category,
                 "dimension": dimension,

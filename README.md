@@ -110,6 +110,8 @@ AUDIT_ENGINE=legacy
 - `auto_review_system/data/analysis/review_methodology.json`
 - `auto_review_system/data/analysis/review_deep_attribution_cases.json`
 - `auto_review_system/data/analysis/repair_v2_benchmark_report.md`
+- `auto_review_system/data/analysis/unresolved_review_sources.md`
+- `auto_review_system/data/analysis/unresolved_review_source_manifest.csv`
 
 先 dry-run 查看拆解数量和维度分布：
 
@@ -132,6 +134,19 @@ PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/run_re
 ```
 
 该脚本默认关闭 AI，只验证本地规则、历史经验泛化、控制点判断和补写建议，不产生大模型调用费用。脚本会从本地 ignored 的 `原始材料/` 自动发现代表样本；如需固定样本，可传入 `--cases-file auto_review_system/data/analysis/repair_benchmark_cases.local.json`。
+
+分析仍无法对齐原方案的审核意见：
+
+```bash
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/analyze_unresolved_review_sources.py
+```
+
+脚本会生成本地 ignored 文件 `auto_review_system/data/analysis/unresolved_review_source_manifest.csv`。补充原始方案后，在该 CSV 的 `user_supplied_path` 填入文件路径，再按同一路线重跑：
+
+```bash
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/analyze_unresolved_review_sources.py --source-manifest auto_review_system/data/analysis/unresolved_review_source_manifest.csv
+PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_review_experience_kb.py --source-manifest auto_review_system/data/analysis/unresolved_review_source_manifest.csv --apply
+```
 
 ## WBS 本地补标
 

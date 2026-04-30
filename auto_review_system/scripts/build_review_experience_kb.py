@@ -68,13 +68,14 @@ def main():
     parser.add_argument("--opinion-file", default=DEFAULT_OPINION_FILE)
     parser.add_argument("--material-dir", default=DEFAULT_MATERIAL_DIR)
     parser.add_argument("--output-dir", default=ANALYSIS_DIR)
+    parser.add_argument("--source-manifest", default="", help="Optional CSV/JSON mapping project_name to original source files.")
     parser.add_argument("--scope", choices=["scheme-priority", "scheme-only", "all"], default="scheme-priority")
     parser.add_argument("--apply", action="store_true", help="Publish cards into SQLite/JSON/Chroma knowledge base.")
     parser.add_argument("--dry-run", action="store_true", help="Analyze only; never write the knowledge base.")
     parser.add_argument("--max-items", type=int, default=0, help="Limit rows for debugging.")
     args = parser.parse_args()
 
-    rows = load_opinion_rows(args.opinion_file, args.material_dir)
+    rows = load_opinion_rows(args.opinion_file, args.material_dir, source_manifest=args.source_manifest or None)
     if args.max_items:
         rows = rows[: args.max_items]
     rows = enrich_rows_with_scheme_evidence(rows, args.material_dir)
