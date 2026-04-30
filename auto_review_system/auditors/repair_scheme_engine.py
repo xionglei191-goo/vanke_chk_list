@@ -12,7 +12,15 @@ import re
 from collections import defaultdict
 
 from auditors.engineering_auditor import call_llm, is_llm_runtime_failure
-from auditors.repair_prompts import REPAIR_REVIEW_SYSTEM_PROMPT, build_repair_review_user_prompt
+from auditors.repair_prompts import (
+    REPAIR_CRITIC_SYSTEM_PROMPT,
+    REPAIR_REVIEW_SYSTEM_PROMPT,
+    REPAIR_TOOL_PLAN_SYSTEM_PROMPT,
+    build_repair_critic_user_prompt,
+    build_repair_review_user_prompt,
+    build_repair_tool_plan_user_prompt,
+)
+from llm.cache import call_stats_since, current_timestamp
 from rag_engine.review_experience import (
     CORE_DIMENSIONS,
     assess_scheme_alignment,
@@ -57,6 +65,14 @@ ISSUE_DOMAIN_TERMS = (
     "角铁", "方通", "油漆", "乳胶漆", "腻子", "抹灰", "防火门", "防水",
 )
 COST_OR_MEASURE_HINT = re.compile(r"措施费|报价|白单|清单|对下|结算|计量|工程量")
+VALID_AI_REVIEW_MODES = {"off", "once", "adaptive", "quality"}
+AI_BUDGET_DEFAULTS = {"off": 0, "once": 1, "adaptive": 2, "quality": 3}
+HIGH_RISK_TERMS = ("防水", "渗漏", "植筋", "防火门", "钢化玻璃", "给排水", "弱电", "电梯", "石材", "EPDM")
+ALLOWED_REPAIR_TOOLS = {"standards_search", "experience_search", "scheme_snippet", "cost_snippet"}
+GENERIC_QUERY_TOKENS = {
+    "工程", "施工", "方案", "改造", "维修", "翻新", "明确", "需要", "材料", "工艺",
+    "验收", "问题", "当前", "历史", "专家", "审核", "分项", "进行",
+}
 
 
 def _compact(text):
@@ -70,6 +86,71 @@ def _contains(text, *keywords):
 
 def _missing_any(text, keywords):
     return [keyword for keyword in keywords if not _contains(text, keyword)]
+
+
+def _env_bool(name, default=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_int_env(name, default):
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def _ai_review_mode():
+    raw_mode = os.getenv("REPAIR_AI_REVIEW_MODE", "").strip().lower()
+    if raw_mode:
+        return raw_mode if raw_mode in VALID_AI_REVIEW_MODES else "adaptive"
+
+    legacy = os.getenv("REPAIR_AI_REVIEW_ENABLED", "").strip().lower()
+    if legacy in {"0", "false", "no", "off"}:
+        return "off"
+    if legacy in {"1", "true", "yes", "on"}:
+        return "adaptive"
+    return "adaptive"
+
+
+def _ai_call_budget(mode):
+    return max(0, _safe_int_env("REPAIR_AI_CALL_BUDGET", AI_BUDGET_DEFAULTS.get(mode, 2)))
+
+
+def _tool_query_limit():
+    return max(0, _safe_int_env("REPAIR_TOOL_QUERY_LIMIT", 6))
+
+
+def _tool_result_chars():
+    return max(400, _safe_int_env("REPAIR_TOOL_RESULT_CHARS", 2400))
+
+
+def _thinking_enabled():
+    return _env_bool("LLM_THINKING_ENABLED", False)
+
+
+def _risk_terms_in_text(text):
+    return [term for term in HIGH_RISK_TERMS if _contains(text, term)]
+
+
+def _complexity_score(combined_text, audit_sections, local_issues, experience_cards, global_cost_context):
+    reasons = []
+    if len(combined_text) > 6000:
+        reasons.append("方案文本超过6000字")
+    if len(audit_sections) >= 5:
+        reasons.append("语义段不少于5个")
+    if len(local_issues) >= 2:
+        reasons.append("本地问题不少于2条")
+    if len(experience_cards) >= 2:
+        reasons.append("命中历史经验卡不少于2张")
+    if str(global_cost_context or "").strip():
+        reasons.append("上传了报价/白单/清单上下文")
+    risk_terms = _risk_terms_in_text(combined_text)
+    if len(risk_terms) >= 2:
+        reasons.append(f"命中高风险领域：{'、'.join(risk_terms[:6])}")
+    return len(reasons), reasons
 
 
 def _domain_matches_current_scheme(card, text):
@@ -729,8 +810,10 @@ def _group_issues(issues):
     return dict(grouped)
 
 
-def _ai_review_enabled():
-    return os.getenv("REPAIR_AI_REVIEW_ENABLED", "true").strip().lower() in {"1", "true", "yes"}
+def _ai_review_enabled(mode=None, budget=None):
+    mode = mode or _ai_review_mode()
+    budget = _ai_call_budget(mode) if budget is None else budget
+    return mode != "off" and budget > 0
 
 
 def _standard_tool_queries(local_issues, experience_cards, combined_text):
@@ -752,23 +835,24 @@ def _standard_tool_queries(local_issues, experience_cards, combined_text):
         compact = _compact(query)[:160]
         if compact and compact not in deduped:
             deduped.append(compact)
-    limit = int(os.getenv("REPAIR_TOOL_QUERY_LIMIT", "4"))
+    limit = _tool_query_limit()
     return deduped[:limit]
 
 
-def _build_tool_context(combined_text, local_issues, experience_cards):
+def _build_tool_context(combined_text, local_issues, experience_cards, tool_results=None, tool_plan=None):
     standard_snippets = []
-    for query in _standard_tool_queries(local_issues, experience_cards, combined_text):
-        try:
-            snippet = retrieve_rules(query, n_results=2)
-        except Exception as exc:
-            snippet = f"[tool_error] {exc}"
-        if snippet:
-            standard_snippets.append({
-                "tool": "retrieve_rules",
-                "query": query,
-                "result": snippet[:2400],
-            })
+    if not tool_results:
+        for query in _standard_tool_queries(local_issues, experience_cards, combined_text):
+            try:
+                snippet = retrieve_rules(query, n_results=2)
+            except Exception as exc:
+                snippet = f"[tool_error] {exc}"
+            if snippet:
+                standard_snippets.append({
+                    "tool": "retrieve_rules",
+                    "query": query,
+                    "result": snippet[:_tool_result_chars()],
+                })
     methodology = {
         "core_dimensions": list(CORE_DIMENSIONS),
         "review_goal": "判断方案是否能指导施工、计价、验收和复核",
@@ -778,13 +862,15 @@ def _build_tool_context(combined_text, local_issues, experience_cards):
     return {
         "methodology": methodology,
         "standard_snippets": standard_snippets,
+        "tool_plan": tool_plan or [],
+        "tool_results": tool_results or [],
         "tool_policy": "所有规范片段只作为证据候选；历史经验必须结合当前方案触发条件后才能泛化。",
     }
 
 
-def _parse_ai_issues(raw_text):
+def _json_array_from_text(raw_text):
     if not raw_text or is_llm_runtime_failure(raw_text):
-        return []
+        return None
     text = raw_text.strip()
     match = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.S)
     if match:
@@ -796,9 +882,123 @@ def _parse_ai_issues(raw_text):
     try:
         data = json.loads(text)
     except Exception:
+        return None
+    return data if isinstance(data, list) else None
+
+
+def _query_tokens(query):
+    tokens = []
+    for token in re.findall(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,8}", str(query or "")):
+        if token in GENERIC_QUERY_TOKENS:
+            continue
+        if token not in tokens:
+            tokens.append(token)
+    return tokens[:8]
+
+
+def _snippet_around_query(text, query, max_chars=900):
+    text = _compact(text)
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    lowered = text.lower()
+    positions = [
+        lowered.find(token.lower())
+        for token in _query_tokens(query)
+        if lowered.find(token.lower()) >= 0
+    ]
+    if not positions:
+        return text[:max_chars]
+    center = min(positions)
+    start = max(0, center - max_chars // 3)
+    end = min(len(text), start + max_chars)
+    if end - start < max_chars:
+        start = max(0, end - max_chars)
+    prefix = "..." if start > 0 else ""
+    suffix = "..." if end < len(text) else ""
+    return f"{prefix}{text[start:end]}{suffix}"
+
+
+def _parse_tool_plan(raw_text):
+    data = _json_array_from_text(raw_text)
+    if not data:
         return []
-    if not isinstance(data, list):
-        return []
+    actions = []
+    seen = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        tool = _compact(item.get("tool"))
+        query = _compact(item.get("query"))
+        reason = _compact(item.get("reason"))
+        if tool not in ALLOWED_REPAIR_TOOLS or not query:
+            continue
+        key = (tool, query)
+        if key in seen:
+            continue
+        seen.add(key)
+        actions.append({"tool": tool, "query": query[:160], "reason": reason[:240]})
+        if len(actions) >= _tool_query_limit():
+            break
+    return actions
+
+
+def _summarize_experience_search(query, combined_text, fallback_cards):
+    cards = load_analysis_cards() or []
+    matched = match_experience_cards(query, cards, limit=3, min_overlap=1) if cards else []
+    if not matched:
+        tokens = _query_tokens(query)
+        matched = [
+            card for card in fallback_cards
+            if any(token.lower() in str(card.get("source_opinion", "")).lower() for token in tokens)
+        ][:3]
+    aligned = _align_experience_cards_to_current_scheme(matched, combined_text) if matched else []
+    summaries = []
+    for card in aligned[:3]:
+        summaries.append({
+            "source_project": card.get("source_project", ""),
+            "work_category": card.get("work_category", ""),
+            "source_opinion": card.get("source_opinion", ""),
+            "alignment_status": card.get("alignment_status", ""),
+            "missing_points": card.get("missing_points", []),
+            "partial_points": card.get("partial_points", []),
+            "scheme_gap": card.get("scheme_gap", ""),
+            "generalization_rule": card.get("generalization_rule", ""),
+        })
+    return json.dumps(summaries, ensure_ascii=False)
+
+
+def _execute_tool_plan(tool_plan, combined_text, global_cost_context, experience_cards):
+    results = []
+    for action in (tool_plan or [])[:_tool_query_limit()]:
+        tool = action.get("tool")
+        query = action.get("query", "")
+        if tool not in ALLOWED_REPAIR_TOOLS or not query:
+            continue
+        try:
+            if tool == "standards_search":
+                result = retrieve_rules(query, n_results=2)
+            elif tool == "experience_search":
+                result = _summarize_experience_search(query, combined_text, experience_cards)
+            elif tool == "scheme_snippet":
+                result = _snippet_around_query(combined_text, query, max_chars=1200)
+            elif tool == "cost_snippet":
+                result = _snippet_around_query(global_cost_context, query, max_chars=1200) or "未上传或未解析到报价/白单/清单上下文。"
+            else:
+                continue
+        except Exception as exc:
+            result = f"[tool_error] {exc}"
+        results.append({
+            "tool": tool,
+            "query": query,
+            "reason": action.get("reason", ""),
+            "result": str(result or "")[:_tool_result_chars()],
+        })
+    return results
+
+
+def _issues_from_ai_items(data, origin="ai_final"):
     issues = []
     for item in data:
         if not isinstance(item, dict):
@@ -812,6 +1012,7 @@ def _parse_ai_issues(raw_text):
             continue
         confidence = item.get("confidence") if item.get("confidence") in {"高", "中", "低"} else "中"
         evidence_type = item.get("evidence_type") if item.get("evidence_type") in {"规范", "专家经验", "方案内部逻辑"} else "专家经验"
+        before_count = len(issues)
         _add_issue(
             issues,
             work_item,
@@ -823,24 +1024,126 @@ def _parse_ai_issues(raw_text):
             evidence_ref=_compact(item.get("evidence_ref") or "AI综合审核：历史经验+规范候选+方案内部逻辑"),
             confidence=confidence,
         )
+        if len(issues) > before_count:
+            issues[-1]["origin"] = origin
     return issues
 
 
-def _ai_reasoned_issues(project_name, sections, local_issues, experience_cards, tool_context):
-    if not _ai_review_enabled():
+def _parse_ai_issues(raw_text, origin="ai_final"):
+    data = _json_array_from_text(raw_text)
+    if data is None:
         return []
-    user_prompt = build_repair_review_user_prompt(project_name, sections, local_issues, experience_cards, tool_context)
+    return _issues_from_ai_items(data, origin=origin)
+
+
+def _ai_tool_plan(project_name, sections, local_issues, experience_cards, tool_budget, global_cost_context):
+    if tool_budget <= 0:
+        return []
+    user_prompt = build_repair_tool_plan_user_prompt(
+        project_name,
+        sections,
+        local_issues,
+        experience_cards,
+        tool_budget=tool_budget,
+        cost_context_available=bool(str(global_cost_context or "").strip()),
+    )
+    result = call_llm(
+        REPAIR_TOOL_PLAN_SYSTEM_PROMPT,
+        user_prompt,
+        max_retries=1,
+        timeout=_safe_int_env("REPAIR_AI_REVIEW_TIMEOUT", 180),
+        extra_payload={"max_tokens": min(2048, _safe_int_env("REPAIR_AI_REVIEW_MAX_TOKENS", 4096))},
+        caller_label="repair_v2.plan",
+    )
+    return _parse_tool_plan(result)
+
+
+def _ai_reasoned_issues(project_name, sections, local_issues, experience_cards, tool_context, tool_plan=None, runtime_context=None):
+    user_prompt = build_repair_review_user_prompt(
+        project_name,
+        sections,
+        local_issues,
+        experience_cards,
+        tool_context,
+        tool_plan=tool_plan,
+        runtime_context=runtime_context,
+    )
     result = call_llm(
         REPAIR_REVIEW_SYSTEM_PROMPT,
         user_prompt,
         max_retries=1,
-        timeout=int(os.getenv("REPAIR_AI_REVIEW_TIMEOUT", "120")),
-        extra_payload={"max_tokens": int(os.getenv("REPAIR_AI_REVIEW_MAX_TOKENS", "4096"))},
+        timeout=_safe_int_env("REPAIR_AI_REVIEW_TIMEOUT", 180),
+        extra_payload={"max_tokens": _safe_int_env("REPAIR_AI_REVIEW_MAX_TOKENS", 4096)},
+        caller_label="repair_v2.final",
     )
-    return _parse_ai_issues(result)
+    return _parse_ai_issues(result, origin="ai_final")
+
+
+def _ai_critic_issues(project_name, sections, protected_local_issues, ai_issues, tool_context):
+    if not ai_issues:
+        return ai_issues
+    user_prompt = build_repair_critic_user_prompt(project_name, sections, protected_local_issues, ai_issues, tool_context)
+    result = call_llm(
+        REPAIR_CRITIC_SYSTEM_PROMPT,
+        user_prompt,
+        max_retries=1,
+        timeout=_safe_int_env("REPAIR_AI_REVIEW_TIMEOUT", 180),
+        extra_payload={"max_tokens": _safe_int_env("REPAIR_AI_REVIEW_MAX_TOKENS", 4096)},
+        caller_label="repair_v2.critic",
+    )
+    data = _json_array_from_text(result)
+    if data is None:
+        return ai_issues
+    return _issues_from_ai_items(data, origin="ai_critic")
+
+
+def _runtime_info_report(runtime):
+    lines = [
+        f"**AI模式**：{runtime.get('ai_mode')}",
+        f"**调用预算**：{runtime.get('ai_call_budget')}",
+        f"**实际非缓存LLM调用数**：{runtime.get('llm_real_calls', 0)}",
+        f"**缓存命中数**：{runtime.get('llm_cache_hits', 0)}",
+        f"**工具查询数**：{runtime.get('tool_query_count', 0)}",
+        f"**Thinking启用**：{'是' if runtime.get('thinking_enabled') else '否'}",
+        f"**复杂度评分**：{runtime.get('complexity_score', 0)}",
+        f"**执行阶段**：{' -> '.join(runtime.get('stages', [])) or '本地审核'}",
+    ]
+    reasons = runtime.get("complexity_reasons") or []
+    if reasons:
+        lines.append(f"**复杂度原因**：{'；'.join(reasons)}")
+    stats = runtime.get("llm_status_counts") or {}
+    if stats:
+        lines.append(f"**LLM状态统计**：{json.dumps(stats, ensure_ascii=False)}")
+    result = "\n".join(lines)
+    return {
+        "agent": "审核运行信息",
+        "heading": "AI与工具调用统计",
+        "result": result,
+        "dimension": "描述完整性",
+        "work_item": "审核运行信息",
+        "finding": "AI与工具调用统计",
+        "reason": "用于核对本次审核是否启用 AI、工具查询和缓存。",
+        "evidence_type": "方案内部逻辑",
+        "evidence_ref": "系统运行记录",
+        "recommendation": "如需提高质量可使用 quality 模式；如需完全停用大模型可使用 off 模式。",
+        "confidence": "高",
+        "origin": "runtime_info",
+    }
 
 
 def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_context="", progress_callback=None, status_check_callback=None):
+    ai_mode = _ai_review_mode()
+    ai_budget = _ai_call_budget(ai_mode)
+    llm_stats_start = current_timestamp()
+    runtime_info = {
+        "ai_mode": ai_mode,
+        "ai_call_budget": ai_budget,
+        "thinking_enabled": _thinking_enabled(),
+        "tool_query_count": 0,
+        "stages": [],
+        "complexity_score": 0,
+        "complexity_reasons": [],
+    }
     sections = split_repair_scheme_sections(chunks_ready_for_agents)
     for section in sections:
         if section.get("section_type") == "界面划分":
@@ -874,15 +1177,87 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
     issues = []
     issues.extend(local_issues)
     issues.extend(experience_issues)
+    complexity_score, complexity_reasons = _complexity_score(
+        combined_text,
+        audit_sections,
+        local_issues,
+        experience_cards,
+        global_cost_context,
+    )
+    runtime_info["complexity_score"] = complexity_score
+    runtime_info["complexity_reasons"] = complexity_reasons
 
-    if _ai_review_enabled():
-        tool_context = _build_tool_context(combined_text, local_issues, experience_cards)
+    if _ai_review_enabled(ai_mode, ai_budget):
+        remaining_budget = ai_budget
+        use_planned_tools = (
+            remaining_budget >= 2
+            and (
+                ai_mode == "quality"
+                or (ai_mode == "adaptive" and complexity_score >= 2)
+            )
+        )
+        tool_plan = []
+        tool_results = []
+        if use_planned_tools:
+            if progress_callback:
+                progress_callback("🧭 v2零星工程审核：AI 正在规划本次工具查询。", 0.48)
+            runtime_info["stages"].append("ai_tool_plan")
+            tool_plan = _ai_tool_plan(
+                project_name,
+                audit_sections,
+                issues,
+                experience_cards,
+                tool_budget=_tool_query_limit(),
+                global_cost_context=global_cost_context,
+            )
+            remaining_budget -= 1
+            if tool_plan:
+                tool_results = _execute_tool_plan(tool_plan, combined_text, global_cost_context, experience_cards)
+                runtime_info["tool_query_count"] = len(tool_results)
+            else:
+                runtime_info["stages"].append("tool_plan_fallback")
+
+        tool_context = _build_tool_context(
+            combined_text,
+            issues,
+            experience_cards,
+            tool_results=tool_results,
+            tool_plan=tool_plan,
+        )
+        if not tool_results:
+            runtime_info["tool_query_count"] = len(tool_context.get("standard_snippets", []))
+
+        ai_issues = []
+        if remaining_budget > 0:
+            if progress_callback:
+                progress_callback("🧠 v2零星工程审核：开始 AI 归因泛化和最终判断。", 0.65)
+            runtime_info["stages"].append("ai_final")
+            ai_issues = _ai_reasoned_issues(
+                project_name,
+                audit_sections,
+                issues,
+                experience_cards,
+                tool_context,
+                tool_plan=tool_plan,
+                runtime_context={
+                    "ai_mode": ai_mode,
+                    "complexity_score": complexity_score,
+                    "complexity_reasons": complexity_reasons,
+                },
+            )
+            remaining_budget -= 1
+
+        if ai_mode == "quality" and remaining_budget > 0 and ai_issues:
+            if progress_callback:
+                progress_callback("🧪 v2零星工程审核：开始 AI 质量复核，压制偏题和无证据结论。", 0.82)
+            runtime_info["stages"].append("ai_critic")
+            ai_issues = _ai_critic_issues(project_name, audit_sections, issues, ai_issues, tool_context)
+            remaining_budget -= 1
+
+        issues.extend(ai_issues)
     else:
         tool_context = {"methodology": {"core_dimensions": list(CORE_DIMENSIONS)}, "standard_snippets": []}
-
-    if progress_callback and _ai_review_enabled():
-        progress_callback("🧠 v2零星工程审核：已完成本地工具查询，开始一次 AI 归因泛化判断。", 0.65)
-    issues.extend(_ai_reasoned_issues(project_name, audit_sections, issues, experience_cards, tool_context))
+        runtime_info["stages"].append("local_only")
 
     if global_cost_context and os.getenv("COST_REVIEW_MODE", "explicit").strip().lower() != "off":
         if _contains(global_cost_context, "报价", "清单", "项目特征") and _contains(combined_text, "白单", "清单", "报价"):
@@ -898,6 +1273,12 @@ def run_repair_pipeline(chunks_ready_for_agents, project_name, global_cost_conte
 
     issues = _prefer_control_point_issues(issues)
     issues = _dedupe_issues(issues)
+    llm_stats = call_stats_since(llm_stats_start, caller_prefix="repair_v2.")
+    runtime_info["llm_real_calls"] = llm_stats.get("real_calls", 0)
+    runtime_info["llm_cache_hits"] = llm_stats.get("cache_hits", 0)
+    runtime_info["llm_status_counts"] = llm_stats.get("by_status", {})
     if progress_callback:
         progress_callback(f"✅ v2零星工程审核：生成 {len(issues)} 条分项问题。", 0.95)
-    return _group_issues(issues)
+    grouped = _group_issues(issues)
+    grouped["审核运行信息"] = [_runtime_info_report(runtime_info)]
+    return grouped

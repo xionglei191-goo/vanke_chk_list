@@ -57,7 +57,11 @@ AUDIT_ENGINE=v2_repair
 REVIEW_EXPERIENCE_ENABLED=true
 COST_REVIEW_MODE=explicit
 REPAIR_AI_REVIEW_ENABLED=true
-REPAIR_TOOL_QUERY_LIMIT=4
+REPAIR_AI_REVIEW_MODE=adaptive
+REPAIR_AI_CALL_BUDGET=2
+REPAIR_TOOL_QUERY_LIMIT=6
+REPAIR_TOOL_RESULT_CHARS=2400
+REPAIR_AI_REVIEW_TIMEOUT=180
 REPAIR_CROSS_PROJECT_EXPERIENCE=true
 REPAIR_CROSS_PROJECT_MIN_OVERLAP=2
 REPAIR_CROSS_PROJECT_MATCH_LIMIT=4
@@ -72,7 +76,9 @@ LLM_REASONING_EFFORT=medium
 - `balanced` 默认关闭 LLM 哨兵和 LLM RAG reranker。
 - 同一 prompt 的成功响应会缓存 30 天。
 - 模型异常响应短缓存 10 分钟，避免超时期间反复扣费。
-- v2 零星工程引擎默认本地匹配历史经验、主动查询规范片段，然后只做一次 AI 归因泛化判断。
+- v2 零星工程引擎默认使用 `adaptive`：简单方案一次 AI 总审，复杂方案先由 AI 规划工具查询，再由 AI 综合归因输出，默认预算 2 次调用。
+- `REPAIR_AI_REVIEW_MODE=off|once|adaptive|quality`：`off` 完全本地，`once` 一次 AI 总审，`adaptive` 按复杂度选择一或两次，`quality` 允许工具计划、最终审核和质量复核。
+- 每份 v2 初审卷宗会增加 `审核运行信息` 分组，显示 AI 模式、调用预算、真实非缓存调用、缓存命中、工具查询数和 thinking 开关。
 - `COST_REVIEW_MODE=explicit` 表示只有明确上传报价/清单或方案内出现清单交叉点时，才触发方案清单一致性检查。
 - `REPAIR_CROSS_PROJECT_EXPERIENCE=true` 会启用跨项目经验泛化；`REPAIR_CROSS_PROJECT_MIN_OVERLAP=2` 要求至少命中核心工程词，`REPAIR_CROSS_PROJECT_MATCH_LIMIT=4` 限制跨项目补充数量，并会按当前方案重新判断控制点，避免照搬历史源方案结论。
 - `LLM_THINKING_ENABLED=true` 会向支持的模型传递 thinking/reasoning 参数；最终报告不会输出思维链。

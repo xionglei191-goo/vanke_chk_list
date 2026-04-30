@@ -61,6 +61,8 @@ def _case_chunk(file_path):
 def _flatten_reports(reports):
     rows = []
     for work_item, items in reports.items():
+        if work_item == "审核运行信息":
+            continue
         for item in items:
             copied = dict(item)
             copied["group"] = work_item
@@ -133,9 +135,11 @@ def load_benchmark_cases(material_dir, cases_file=None):
 
 def _run_case(case, material_dir, with_ai=False):
     old_ai = os.environ.get("REPAIR_AI_REVIEW_ENABLED")
+    old_ai_mode = os.environ.get("REPAIR_AI_REVIEW_MODE")
     old_experience = os.environ.get("REVIEW_EXPERIENCE_ENABLED")
     if not with_ai:
         os.environ["REPAIR_AI_REVIEW_ENABLED"] = "false"
+        os.environ["REPAIR_AI_REVIEW_MODE"] = "off"
     os.environ["REVIEW_EXPERIENCE_ENABLED"] = "true"
     try:
         file_path = Path(material_dir) / case["file_name"]
@@ -171,6 +175,10 @@ def _run_case(case, material_dir, with_ai=False):
             os.environ.pop("REPAIR_AI_REVIEW_ENABLED", None)
         else:
             os.environ["REPAIR_AI_REVIEW_ENABLED"] = old_ai
+        if old_ai_mode is None:
+            os.environ.pop("REPAIR_AI_REVIEW_MODE", None)
+        else:
+            os.environ["REPAIR_AI_REVIEW_MODE"] = old_ai_mode
         if old_experience is None:
             os.environ.pop("REVIEW_EXPERIENCE_ENABLED", None)
         else:

@@ -26,6 +26,10 @@ def _ts(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def current_timestamp():
+    return _ts(_now())
+
+
 def success_ttl_seconds():
     days = int(os.getenv("LLM_CACHE_TTL_DAYS", "30"))
     return max(0, days) * 24 * 60 * 60
@@ -141,3 +145,43 @@ def cache_stats():
         calls = conn.execute("SELECT COUNT(*) FROM llm_call_log").fetchone()[0]
         hits = conn.execute("SELECT COUNT(*) FROM llm_call_log WHERE cache_hit = 1").fetchone()[0]
     return {"cached_responses": cached, "logged_calls": calls, "cache_hits": hits}
+
+
+def call_stats_since(since_text, caller_prefix=""):
+    init_db()
+    since_text = since_text or "1970-01-01 00:00:00"
+    where = "created_at >= ?"
+    params = [since_text]
+    if caller_prefix:
+        where += " AND caller LIKE ?"
+        params.append(f"{caller_prefix}%")
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT cache_hit, status, caller, COUNT(*)
+            FROM llm_call_log
+            WHERE {where}
+            GROUP BY cache_hit, status, caller
+            """,
+            params,
+        ).fetchall()
+    total = 0
+    hits = 0
+    real_calls = 0
+    by_status = {}
+    by_caller = {}
+    for cache_hit, status, caller, count in rows:
+        total += count
+        if cache_hit:
+            hits += count
+        else:
+            real_calls += count
+        by_status[status or ""] = by_status.get(status or "", 0) + count
+        by_caller[caller or ""] = by_caller.get(caller or "", 0) + count
+    return {
+        "logged_calls": total,
+        "cache_hits": hits,
+        "real_calls": real_calls,
+        "by_status": by_status,
+        "by_caller": by_caller,
+    }

@@ -110,7 +110,7 @@ def _reasoning_extra_payload():
     return {"reasoning_effort": effort}
 
 
-def call_llm(system_prompt, user_text, max_retries=None, timeout=LLM_REQUEST_TIMEOUT, extra_payload=None):
+def call_llm(system_prompt, user_text, max_retries=None, timeout=LLM_REQUEST_TIMEOUT, extra_payload=None, caller_label=None):
     """
     调用 LLM 并自动重试（指数退避）。这是全项目最高频使用的 LLM 入口。
     """
@@ -146,7 +146,7 @@ def call_llm(system_prompt, user_text, max_retries=None, timeout=LLM_REQUEST_TIM
         user_text,
         cache_params,
     )
-    caller = _caller_label()
+    caller = caller_label or _caller_label()
     cached = get_cached_text(cache_key)
     if cached is not None:
         record_call(cache_key, True, payload.get("model", LLM_MODEL), LLM_API_TYPE, caller, "cache_hit")

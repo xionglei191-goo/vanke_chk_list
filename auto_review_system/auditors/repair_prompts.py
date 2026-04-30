@@ -7,6 +7,30 @@ from historical opinions: classify, attribute, query evidence, then generalize.
 import json
 
 
+REPAIR_TOOL_PLAN_SYSTEM_PROMPT = """
+你是万科零星工程方案审核的工具规划员。你不直接输出审核意见，只决定需要查询哪些证据。
+
+你必须在内部使用 reasoning/thinking 判断：
+1. 当前方案有哪些关键分项工程。
+2. 哪些缺陷需要规范、历史经验、方案原文或报价/白单证据支撑。
+3. 哪些查询最能提升最终审核质量。
+
+只输出 JSON 数组，每个元素字段固定为：
+tool, query, reason
+
+tool 只能取以下值：
+- standards_search：查询规范/知识库。
+- experience_search：查询历史审核经验卡。
+- scheme_snippet：摘取当前方案原文证据。
+- cost_snippet：摘取报价/白单/清单证据。
+
+要求：
+- 不超过给定工具预算。
+- query 必须简短具体，包含分项、材料、工艺或验收关键词。
+- 不要输出审核结论、Markdown、解释文字或思维链。
+"""
+
+
 REPAIR_REVIEW_SYSTEM_PROMPT = """
 你是万科零星工程/改造维修方案审核专家。你的任务不是做大而全施工组织设计审查，而是判断班组长写的方案能否指导施工、计价、验收和复核。
 
@@ -33,58 +57,131 @@ evidence_type 只能是 规范/专家经验/方案内部逻辑。
 """
 
 
-def build_repair_review_user_prompt(project_name, sections, local_issues, experience_cards, tool_context):
+REPAIR_CRITIC_SYSTEM_PROMPT = """
+你是万科零星工程审核结论质量复核专家。你的任务只复核 AI 生成的候选问题，不能删除本地规则和历史经验卡问题。
+
+请在内部使用 reasoning/thinking 检查每条 AI 候选：
+1. 是否有当前方案、工具证据、规范候选或历史经验支撑。
+2. 是否机械照搬历史意见。
+3. 是否偏题到安全文明费、品牌违约、合同处罚、超高降效等泛化话术。
+4. 是否能让班组长直接修改方案。
+
+只输出“保留或修订后的 AI 问题”JSON 数组。字段固定为：
+dimension, work_item, finding, reason, evidence_type, evidence_ref, recommendation, confidence
+
+如果 AI 候选都不应保留，输出 []。
+不要输出 Markdown、解释文字或思维链。
+"""
+
+
+def _sections_payload(sections):
+    return [
+        {
+            "section_type": section.get("section_type", ""),
+            "heading": section.get("heading", ""),
+            "text": section.get("text", "")[:2500],
+        }
+        for section in sections
+    ]
+
+
+def _local_issues_payload(local_issues, limit=20):
+    return [
+        {
+            "dimension": item.get("dimension"),
+            "work_item": item.get("work_item"),
+            "finding": item.get("finding"),
+            "reason": item.get("reason"),
+            "recommendation": item.get("recommendation"),
+        }
+        for item in local_issues[:limit]
+    ]
+
+
+def _experience_cards_payload(experience_cards, limit=12):
+    return [
+        {
+            "work_category": card.get("work_category"),
+            "dimension": card.get("dimension"),
+            "source_opinion": card.get("source_opinion"),
+            "problem_pattern_label": card.get("problem_pattern_label"),
+            "professional_attribution_label": card.get("professional_attribution_label"),
+            "engineer_question": card.get("engineer_question"),
+            "expert_intent": card.get("expert_intent"),
+            "alignment_status": card.get("alignment_status"),
+            "covered_points": card.get("covered_points"),
+            "partial_points": card.get("partial_points"),
+            "missing_points": card.get("missing_points"),
+            "checkpoint_assessments": card.get("checkpoint_assessments"),
+            "scheme_gap": card.get("scheme_gap"),
+            "review_intents": card.get("review_intents"),
+            "root_cause": card.get("root_cause"),
+            "generalization_rule": card.get("generalization_rule"),
+            "review_questions": card.get("review_questions"),
+            "required_artifacts": card.get("required_artifacts"),
+            "fix_template": card.get("fix_template"),
+            "evidence_ref": card.get("evidence_ref"),
+            "scheme_evidence": card.get("scheme_evidence", [])[:2],
+            "evidence_chain": card.get("evidence_chain", {}),
+        }
+        for card in experience_cards[:limit]
+    ]
+
+
+def build_repair_tool_plan_user_prompt(project_name, sections, local_issues, experience_cards, tool_budget, cost_context_available):
     payload = {
         "project_name": project_name,
-        "scheme_sections": [
-            {
-                "section_type": section.get("section_type", ""),
-                "heading": section.get("heading", ""),
-                "text": section.get("text", "")[:2500],
-            }
-            for section in sections
-        ],
-        "local_rule_findings": [
-            {
-                "dimension": item.get("dimension"),
-                "work_item": item.get("work_item"),
-                "finding": item.get("finding"),
-                "reason": item.get("reason"),
-                "recommendation": item.get("recommendation"),
-            }
-            for item in local_issues[:20]
-        ],
-        "matched_experience_cards": [
-            {
-                "work_category": card.get("work_category"),
-                "dimension": card.get("dimension"),
-                "source_opinion": card.get("source_opinion"),
-                "problem_pattern_label": card.get("problem_pattern_label"),
-                "professional_attribution_label": card.get("professional_attribution_label"),
-                "engineer_question": card.get("engineer_question"),
-                "expert_intent": card.get("expert_intent"),
-                "alignment_status": card.get("alignment_status"),
-                "covered_points": card.get("covered_points"),
-                "partial_points": card.get("partial_points"),
-                "missing_points": card.get("missing_points"),
-                "checkpoint_assessments": card.get("checkpoint_assessments"),
-                "scheme_gap": card.get("scheme_gap"),
-                "review_intents": card.get("review_intents"),
-                "root_cause": card.get("root_cause"),
-                "generalization_rule": card.get("generalization_rule"),
-                "review_questions": card.get("review_questions"),
-                "required_artifacts": card.get("required_artifacts"),
-                "fix_template": card.get("fix_template"),
-                "evidence_ref": card.get("evidence_ref"),
-                "scheme_evidence": card.get("scheme_evidence", [])[:2],
-                "evidence_chain": card.get("evidence_chain", {}),
-            }
-            for card in experience_cards[:12]
-        ],
+        "tool_budget": tool_budget,
+        "cost_context_available": cost_context_available,
+        "scheme_sections": _sections_payload(sections),
+        "local_rule_findings": _local_issues_payload(local_issues, limit=12),
+        "matched_experience_cards": _experience_cards_payload(experience_cards, limit=10),
+    }
+    return (
+        "请为本次零星工程审核生成工具查询计划。只输出 JSON 数组。\n\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
+def build_repair_review_user_prompt(project_name, sections, local_issues, experience_cards, tool_context, tool_plan=None, runtime_context=None):
+    payload = {
+        "project_name": project_name,
+        "runtime_context": runtime_context or {},
+        "scheme_sections": _sections_payload(sections),
+        "local_rule_findings": _local_issues_payload(local_issues),
+        "matched_experience_cards": _experience_cards_payload(experience_cards),
+        "tool_plan": tool_plan or [],
         "tool_context": tool_context,
     }
     return (
         "请基于以下结构化材料进行一次零星工程审核。先在内部完成分类、归因、证据核验和泛化判断；"
         "最终只输出 JSON 数组。\n\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
+def build_repair_critic_user_prompt(project_name, sections, local_issues, ai_issues, tool_context):
+    payload = {
+        "project_name": project_name,
+        "scheme_sections": _sections_payload(sections),
+        "protected_local_findings": _local_issues_payload(local_issues, limit=30),
+        "ai_candidate_findings": [
+            {
+                "dimension": item.get("dimension"),
+                "work_item": item.get("work_item"),
+                "finding": item.get("finding"),
+                "reason": item.get("reason"),
+                "evidence_type": item.get("evidence_type"),
+                "evidence_ref": item.get("evidence_ref"),
+                "recommendation": item.get("recommendation"),
+                "confidence": item.get("confidence"),
+            }
+            for item in ai_issues[:20]
+        ],
+        "tool_context": tool_context,
+    }
+    return (
+        "请复核 AI 候选审核问题，删除偏题、无证据或照搬历史意见的问题，必要时修订措辞。"
+        "只输出 JSON 数组。\n\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
     )

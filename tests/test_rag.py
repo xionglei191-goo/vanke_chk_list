@@ -31,8 +31,12 @@ from rag_engine.review_experience import (
     split_opinion_items,
 )
 from rag_engine.wbs_classifier import classify_wbs
+from auditors import repair_scheme_engine as repair_engine
 from auditors.repair_scheme_engine import (
     _align_experience_cards_to_current_scheme,
+    _ai_call_budget,
+    _ai_review_mode,
+    _complexity_score,
     _experience_issues_from_cards,
     run_repair_pipeline,
 )
@@ -608,8 +612,10 @@ def run_tests():
     print("🟢 测试 16：v2 零星工程审核引擎基准")
     old_experience = os.environ.get("REVIEW_EXPERIENCE_ENABLED")
     old_ai = os.environ.get("REPAIR_AI_REVIEW_ENABLED")
+    old_ai_mode = os.environ.get("REPAIR_AI_REVIEW_MODE")
     os.environ["REVIEW_EXPERIENCE_ENABLED"] = "false"
     os.environ["REPAIR_AI_REVIEW_ENABLED"] = "false"
+    os.environ["REPAIR_AI_REVIEW_MODE"] = "off"
     try:
         reports = run_repair_pipeline([
             {
@@ -645,7 +651,128 @@ def run_tests():
             os.environ.pop("REPAIR_AI_REVIEW_ENABLED", None)
         else:
             os.environ["REPAIR_AI_REVIEW_ENABLED"] = old_ai
+        if old_ai_mode is None:
+            os.environ.pop("REPAIR_AI_REVIEW_MODE", None)
+        else:
+            os.environ["REPAIR_AI_REVIEW_MODE"] = old_ai_mode
     print("✅ v2 零星工程审核引擎基准测试通过！\n")
+
+    # 测试17：v2 AI 模式、预算、工具计划和运行信息
+    print("🟢 测试 17：v2 AI thinking/tools 调用预算")
+    saved_env = {
+        name: os.environ.get(name)
+        for name in (
+            "REPAIR_AI_REVIEW_MODE",
+            "REPAIR_AI_REVIEW_ENABLED",
+            "REPAIR_AI_CALL_BUDGET",
+            "REPAIR_TOOL_QUERY_LIMIT",
+            "REPAIR_TOOL_RESULT_CHARS",
+            "REVIEW_EXPERIENCE_ENABLED",
+            "LLM_THINKING_ENABLED",
+        )
+    }
+    original_call_llm = repair_engine.call_llm
+    original_retrieve_rules = repair_engine.retrieve_rules
+    try:
+        os.environ.pop("REPAIR_AI_REVIEW_MODE", None)
+        os.environ["REPAIR_AI_REVIEW_ENABLED"] = "false"
+        assert _ai_review_mode() == "off"
+        os.environ["REPAIR_AI_REVIEW_ENABLED"] = "true"
+        assert _ai_review_mode() == "adaptive"
+        os.environ["REPAIR_AI_REVIEW_MODE"] = "quality"
+        os.environ["REPAIR_AI_CALL_BUDGET"] = "3"
+        assert _ai_review_mode() == "quality"
+        assert _ai_call_budget("quality") == 3
+
+        high_text = "防水 渗漏 植筋 防火门 钢化玻璃 EPDM " + ("施工范围。 " * 1200)
+        score, reasons = _complexity_score(
+            high_text,
+            [{"text": str(i)} for i in range(5)],
+            [{"finding": "a"}, {"finding": "b"}],
+            [{"source_opinion": "a"}, {"source_opinion": "b"}],
+            "报价 清单",
+        )
+        assert score >= 5
+        assert reasons
+
+        calls = []
+
+        def fake_call_llm(system_prompt, user_text, max_retries=None, timeout=90, extra_payload=None, caller_label=None):
+            calls.append(caller_label)
+            if caller_label == "repair_v2.plan":
+                return '[{"tool":"standards_search","query":"EPDM 胶水配比 验收","reason":"核对材料参数"},{"tool":"scheme_snippet","query":"EPDM 固化 养护","reason":"核对方案原文"}]'
+            if caller_label == "repair_v2.final":
+                return '[{"dimension":"描述完整性","work_item":"EPDM塑胶地面","finding":"AI补充：EPDM胶水和验收参数仍需量化。","reason":"当前方案只写铺设，缺少胶水配比和验收指标。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充胶水配比、基层验收、固化时间和开放条件。","confidence":"中"}]'
+            if caller_label == "repair_v2.critic":
+                return '[{"dimension":"描述完整性","work_item":"EPDM塑胶地面","finding":"AI补充：EPDM胶水和验收参数仍需量化。","reason":"工具查询和方案原文均显示参数不足。","evidence_type":"专家经验","evidence_ref":"历史经验+工具查询","recommendation":"补充胶水配比、基层验收、固化时间和开放条件。","confidence":"中"}]'
+            return "[]"
+
+        repair_engine.call_llm = fake_call_llm
+        repair_engine.retrieve_rules = lambda query, n_results=2: ("规范片段 " + query) * 50
+        os.environ["REPAIR_AI_REVIEW_MODE"] = "quality"
+        os.environ["REPAIR_AI_CALL_BUDGET"] = "3"
+        os.environ["REPAIR_TOOL_QUERY_LIMIT"] = "2"
+        os.environ["REPAIR_TOOL_RESULT_CHARS"] = "120"
+        os.environ["REVIEW_EXPERIENCE_ENABLED"] = "false"
+        os.environ["LLM_THINKING_ENABLED"] = "true"
+        reports = run_repair_pipeline([
+            {
+                "heading": "复杂方案",
+                "text": (
+                    "施工范围 | EPDM塑胶地面铺设，防水渗漏修补，植筋加固，防火门更换，钢化玻璃更换。\n"
+                    "施工工序 | EPDM底层铺设，面层铺设，防水施工，植筋施工。"
+                    + "补充说明。" * 900
+                ),
+            },
+            {"heading": "验收", "text": "验收 | 完成后验收。"},
+            {"heading": "材料", "text": "材料 | 采用常规材料。"},
+            {"heading": "工期", "text": "工期 | 15天。"},
+            {"heading": "界面", "text": "界面 | 按现场安排。"},
+        ], "AI工具预算样例", global_cost_context="报价 清单 项目特征")
+        assert calls == ["repair_v2.plan", "repair_v2.final", "repair_v2.critic"]
+        assert "审核运行信息" in reports
+        runtime_text = reports["审核运行信息"][0]["result"]
+        assert "AI模式**：quality" in runtime_text
+        assert "调用预算**：3" in runtime_text
+        assert "工具查询数**：2" in runtime_text
+        flat = "\n".join(r["result"] for reps in reports.values() for r in reps)
+        assert "AI补充：EPDM胶水和验收参数仍需量化" in flat
+
+        calls.clear()
+
+        def fake_invalid_plan(system_prompt, user_text, max_retries=None, timeout=90, extra_payload=None, caller_label=None):
+            calls.append(caller_label)
+            if caller_label == "repair_v2.plan":
+                return "不是JSON"
+            return "[]"
+
+        repair_engine.call_llm = fake_invalid_plan
+        os.environ["REPAIR_AI_REVIEW_MODE"] = "adaptive"
+        os.environ["REPAIR_AI_CALL_BUDGET"] = "2"
+        reports = run_repair_pipeline([
+            {"heading": "一", "text": "施工范围 | EPDM 防水 渗漏 植筋 防火门 钢化玻璃。"},
+            {"heading": "二", "text": "施工工序 | 施工。"},
+            {"heading": "三", "text": "验收 | 验收。"},
+            {"heading": "四", "text": "材料 | 材料。"},
+            {"heading": "五", "text": "清单 | 清单。"},
+        ], "工具计划失败样例", global_cost_context="报价 清单")
+        assert calls == ["repair_v2.plan", "repair_v2.final"]
+        assert "tool_plan_fallback" in reports["审核运行信息"][0]["result"]
+
+        calls.clear()
+        os.environ["REPAIR_AI_REVIEW_MODE"] = "off"
+        reports = run_repair_pipeline([{"heading": "简单", "text": "施工范围 | EPDM铺设。"}], "本地模式样例")
+        assert calls == []
+        assert "审核运行信息" in reports
+    finally:
+        repair_engine.call_llm = original_call_llm
+        repair_engine.retrieve_rules = original_retrieve_rules
+        for name, value in saved_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    print("✅ v2 AI thinking/tools 调用预算测试通过！\n")
 
 if __name__ == "__main__":
     run_tests()
