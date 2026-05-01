@@ -618,7 +618,7 @@ def delete_rules_by_category(category):
     rules = get_all_rules()
     to_delete = [r for r in rules if r.get('category', '未知') == category]
     if not to_delete:
-        return False, f"未找到来源为 [{category}] 的军规。"
+        return False, f"未找到来源为 [{category}] 的标准依据。"
 
     remaining = [r for r in rules if r.get('category', '未知') != category]
     kb_store.delete_rules_by_category(category)
@@ -632,7 +632,7 @@ def delete_rules_by_category(category):
 
     build_bm25_index(remaining)
 
-    return True, f"已清除来源【{category}】下的 {len(to_delete)} 条军规。"
+    return True, f"已清除来源【{category}】下的 {len(to_delete)} 条标准依据。"
 
 def get_rule_by_id(rule_id):
     """根据 ID 提取规则详情（优先 SQLite）。"""
@@ -684,7 +684,7 @@ def update_rule(rule_id, new_content, new_wbs, new_level):
 
     build_bm25_index(rules)
 
-    return True, f"✅ 【修订生效】军规 {rule_id} 已完成活体演进！"
+    return True, f"✅ 标准依据 {rule_id} 已完成修订。"
 
 def batch_update_rules(updates, deletes):
     """

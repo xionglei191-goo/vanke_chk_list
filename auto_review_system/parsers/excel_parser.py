@@ -98,7 +98,7 @@ def parse_excel_bill(file_path):
 def parse_excel_as_scheme_chunks(excel_path):
     """
     将施工方案型 Excel 转换为模型识别的 Chunks。
-    把大段文字合并为段落，以便供给方案审查特工 (Agents 1-7)。
+    把大段文字合并为段落，以便供给 v3 AI 主审。
     """
     import openpyxl
     try:

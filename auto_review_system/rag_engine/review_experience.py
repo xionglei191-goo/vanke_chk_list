@@ -1517,7 +1517,7 @@ def build_methodology(rows, cards):
         })
 
     return {
-        "version": "2026-04-30.v2_repair_methodology",
+        "version": "2026-05-01.v3_analysis_source",
         "core_purpose": "判断班组方案能否指导施工、计价、验收和复核，而不是做大而全的施工组织设计审查。",
         "review_loop": [
             "拆分分项工程 WorkItem",

@@ -1,7 +1,7 @@
 """
 🏗️ 专家审阅与自我演进面板
 =========================
-上传施工方案、报价单、现场照片，投递至后台 13-Agent 并发审查。
+上传施工方案、报价单、现场照片，投递至后台 v3 AI 主审。
 """
 import streamlit as st
 import os
@@ -10,24 +10,23 @@ from utils.paths import TEMP_UPLOADS_DIR, safe_upload_name
 
 apply_theme()
 
-st.title("🏗️ 方案评审智能交互查验 (Experts-in-the-Loop)")
-st.caption('迈向 V4：从被动"阅卷机"升级为辅助判断的"智囊团"。专家在此审阅机器输出，并可点对点纠偏教导大模型。')
+st.title("🏗️ v3 零星工程方案审核")
+st.caption("完整小方案由 AI 主审一次性阅读，结合经验手册和本地工具复核，输出可人工确认的分项修改意见。")
 
 os.makedirs(TEMP_UPLOADS_DIR, exist_ok=True)
 
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("1. 资料入舱")
+    st.subheader("1. 上传资料")
     with st.form("upload_form"):
-        uploaded_scheme = st.file_uploader("📂 【业务主轴】施工/验收方案 (支持 Word / Excel)", type=['docx', 'xlsx'])
-        uploaded_cost = st.file_uploader("💰 【执行防线】配套报价/材料清单 (支持 Word / Excel)", type=['docx', 'xlsx'])
-        uploaded_photos = st.file_uploader("📷 【图文互证】现场监控/实景照片辅助 (选填/多图)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
-        submitted_audit = st.form_submit_button("🚀 启动复合并发审阅", type="primary")
+        uploaded_scheme = st.file_uploader("施工/验收方案（Word / Excel）", type=['docx', 'xlsx'])
+        uploaded_cost = st.file_uploader("配套报价/白单/材料清单（Word / Excel，可选）", type=['docx', 'xlsx'])
+        uploaded_photos = st.file_uploader("现场照片（可选/多图）", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+        submitted_audit = st.form_submit_button("🚀 启动 v3 AI 主审", type="primary")
 
 with col2:
-    st.subheader("2. 审查与强化学习设置")
-    use_llm = st.checkbox("双专家 Multi-Agent 并发审验", value=True)
-    st.info("⚡ 支持历史纠偏样本溯源录入：您在下方每一次对大模型判定的『驳回』，都会写入企业经验大脑。成为以后同类项目大模型防幻觉的肌肉记忆。")
+    st.subheader("2. 审核方式")
+    st.info("v3 默认三阶段：AI 初审、本地工具复核、AI 终审与质量复核。历史经验以手册注入，不再使用关键词规则或多 Agent 路由。")
 
 st.divider()
 
@@ -35,7 +34,7 @@ if submitted_audit:
     if not uploaded_scheme and not uploaded_cost:
         st.error("请至少上传一份文档！")
     else:
-        with st.spinner("📦 业务投递箱封存中... 文件物理驻留并派发至异步工业列车..."):
+        with st.spinner("📦 正在保存资料并投递后台 v3 主审..."):
             proj_name = "未命名工程"
             if uploaded_scheme: proj_name = uploaded_scheme.name.rsplit('.', 1)[0]
             elif uploaded_cost: proj_name = uploaded_cost.name.rsplit('.', 1)[0]
@@ -57,5 +56,5 @@ if submitted_audit:
             from rag_engine.queue_manager import add_task
             tid = add_task(proj_name, file_paths)
             
-            st.success(f"🎉 投递大本营成功！工程：【{proj_name}】 | 批次跟踪号：{tid}")
-            st.info("💡 **物理隔离投递制**：您的数百万字工程文档已经脱离网页生命周期，移交给了完全独立的后台挂机工厂！您现在可以放心**关掉当前全部网页**甚至拔电脑电源了。待服务器长线运行结束并装订为 Word 后，请去【📥 审核结果收发室】认领！")
+            st.success(f"已投递：{proj_name} | 任务号：{tid}")
+            st.info("后台 worker 会继续处理。完成后请到【审核结果收发室】进行人工确认和导出。")

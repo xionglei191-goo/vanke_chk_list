@@ -5,7 +5,6 @@ import json
 import jieba
 from rank_bm25 import BM25Okapi
 import logging
-from utils.cost_controls import rag_rerank_mode
 
 # ==========================================
 # 向量数据库与 RAG 检索模块 (通过 JSON 动态加载)
@@ -542,19 +541,7 @@ def retrieve_rules(query, wbs_code=None, lifecycle="施工", n_results=2):
         else:
             top_candidates.append(core_text)
 
-    # --- 低成本重排：balanced 默认走本地词面过滤，quality 可显式启用 LLM 法官 ---
-    mode = rag_rerank_mode()
-    if mode == "llm":
-        try:
-            from auditors.engineering_auditor import llm_rerank_rules
-            final_docs = llm_rerank_rules(query, top_candidates)
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"LLM Rerank Failed: {e}")
-            final_docs = top_candidates
-    elif mode == "off":
-        final_docs = top_candidates
-    else:
-        final_docs = _local_rerank_rules(query, top_candidates)
+    final_docs = _local_rerank_rules(query, top_candidates)
 
     # 只取最靠前的 n_results 个有效强相关规范
     final_docs = final_docs[:n_results]

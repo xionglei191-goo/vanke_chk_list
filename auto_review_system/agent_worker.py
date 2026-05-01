@@ -10,9 +10,7 @@ import logging
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rag_engine.queue_manager import init_db, get_pending_task, update_task_status, get_task_status
-from rag_engine.vector_store import retrieve_rules
-from auditors.multi_agent import run_linear_pipeline
-from auditors.repair_scheme_engine import run_repair_pipeline
+from auditors.v3_ai_review import run_v3_pipeline
 from utils.exporter import markdown_to_docx
 from auditors.engineering_auditor import analyze_vision_wbs
 
@@ -23,11 +21,7 @@ from utils.paths import RESULTS_DIR, resolve_runtime_path
 
 
 def _audit_engine():
-    return os.getenv("AUDIT_ENGINE", "v2_repair").strip().lower()
-
-
-def _cost_review_mode():
-    return os.getenv("COST_REVIEW_MODE", "explicit").strip().lower()
+    return os.getenv("AUDIT_ENGINE", "v3_ai_review").strip().lower()
 
 
 def _is_cost_like_file(file_path):
@@ -40,12 +34,7 @@ def _is_cost_like_file(file_path):
 def _should_extract_cost_context(file_path, file_type):
     if file_type == "cost":
         return True
-    mode = _cost_review_mode()
-    if mode == "off":
-        return False
-    if mode == "explicit":
-        return _is_cost_like_file(file_path)
-    return file_type == "hybrid" or _is_cost_like_file(file_path)
+    return file_type == "hybrid" and _is_cost_like_file(file_path)
 
 def main_loop():
     logger = logging.getLogger("agent_worker")
@@ -88,7 +77,7 @@ def main_loop():
                         with open(file_path, "rb") as img_file:
                             b64_str = base64.b64encode(img_file.read()).decode('utf-8')
                         vis_res = analyze_vision_wbs(b64_str)
-                        global_vision_reports.append({"agent": "Vision Agent 📷", "heading": "现场实景图合规抽检", "result": f"【图像特征识别】：{vis_res}"})
+                        global_vision_reports.append({"agent": "现场图像识别", "heading": "现场实景图辅助识别", "result": f"【图像特征识别】：{vis_res}"})
                     except Exception as e:
                         logger.warning(f"Failed to process photo: {e}")
                     continue
@@ -120,12 +109,6 @@ def main_loop():
                         while status == 'PAUSED': 
                             time.sleep(3)
                             status = get_task_status(task_id)
-                        if _audit_engine() == "v2_repair":
-                            rules = ""
-                        else:
-                            time.sleep(1.5) # API限流保护
-                            rules = retrieve_rules(c['text'], n_results=5)
-                        c['rules'] = rules
                         chunks_ready_for_agents.append(c)
             
             def check_db_cb(): return get_task_status(task_id)
@@ -137,16 +120,13 @@ def main_loop():
             def progress(msg, pct):
                 logger.info(msg)
 
-            if _audit_engine() == "v2_repair":
-                grouped_reports = run_repair_pipeline(
-                    chunks_ready_for_agents,
-                    project_name,
-                    global_cost_context,
-                    progress_callback=progress,
-                    status_check_callback=check_db_cb,
-                )
-            else:
-                grouped_reports = run_linear_pipeline(chunks_ready_for_agents, project_name, global_cost_context, progress_callback=progress, status_check_callback=check_db_cb)
+            grouped_reports = run_v3_pipeline(
+                chunks_ready_for_agents,
+                project_name,
+                global_cost_context,
+                progress_callback=progress,
+                status_check_callback=check_db_cb,
+            )
             
             if global_vision_reports:
                 grouped_reports["全局视觉审查"] = global_vision_reports
