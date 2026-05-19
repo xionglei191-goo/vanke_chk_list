@@ -49,6 +49,7 @@ else:
 VISION_MODEL = os.getenv("VISION_MODEL") or LLM_MODEL
 LLM_STREAM = os.getenv("LLM_STREAM", "true").strip().lower() not in ("0", "false", "no")
 LLM_MAX_CALLS_PER_MINUTE = int(os.getenv("LLM_MAX_CALLS_PER_MINUTE", "15"))
+LLM_MAX_QPS = float(os.getenv("LLM_MAX_QPS", "1"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "2"))
 LLM_SSL_VERIFY = os.getenv("LLM_SSL_VERIFY", "true").strip().lower() not in ("0", "false", "no")
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "90"))

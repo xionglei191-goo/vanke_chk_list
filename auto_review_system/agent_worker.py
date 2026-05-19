@@ -17,7 +17,7 @@ from auditors.engineering_auditor import analyze_vision_wbs
 from parsers.word_parser import parse_word_doc_structured, parse_word_as_cost_context
 from parsers.pdf_parser import parse_pdf_structured, parse_pdf_as_cost_context
 from parsers.excel_parser import parse_excel_bill, parse_excel_as_scheme_chunks
-from utils.paths import RESULTS_DIR, resolve_runtime_path
+from utils.paths import RESULTS_DIR, resolve_runtime_path, safe_artifact_stem
 
 
 def _audit_engine():
@@ -140,7 +140,8 @@ def main_loop():
             result_dir = RESULTS_DIR
             os.makedirs(result_dir, exist_ok=True)
             
-            json_filename = f"{task_id}_{project_name}_raw_reports.json"
+            safe_name = safe_artifact_stem(project_name)
+            json_filename = f"{task_id}_{safe_name}_raw_reports.json"
             json_path = os.path.join(result_dir, json_filename)
             
             with open(json_path, "w", encoding="utf-8") as f:

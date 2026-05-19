@@ -6,8 +6,18 @@
 
 ```bash
 cd auto_review_system
-./start_all.sh
+./start_all.sh start
 ```
+
+常用命令：
+- `./start_all.sh start`：后台启动前台和 Worker，并自动拉起守护巡检。
+- `./start_all.sh status`：查看前台、Worker、守护巡检状态。
+- `./start_all.sh stop`：停止全部服务。
+- `./start_all.sh restart`：重启全部服务。
+- `./start_all.sh foreground`：前台运行，便于本地观察日志。
+
+说明：
+- 脚本已默认关闭 Streamlit 的文件监听模式，避免当前机器上出现 `inotify watch limit reached` 后前台秒退。
 
 服务组成：
 - Streamlit 前台：上传方案/清单、查看任务、人工复审并导出 Word。
@@ -41,6 +51,8 @@ REVIEW_USER_NAME=local_reviewer
 LLM_CACHE_ENABLED=true
 LLM_CACHE_TTL_DAYS=30
 LLM_FAILURE_CACHE_TTL_SECONDS=600
+LLM_MAX_QPS=1
+LLM_MAX_CALLS_PER_MINUTE=15
 LLM_MAX_RETRIES=2
 LLM_THINKING_ENABLED=true
 LLM_THINKING_BUDGET_TOKENS=1024
@@ -48,6 +60,18 @@ LLM_REASONING_EFFORT=medium
 ```
 
 LLM 接口仍通过 `.env` 中的 `LLM_API_TYPE`、`LLM_API_URL`、`LLM_API_KEY`、`LLM_MODEL` 配置。v3 每次审核默认最多 3 次非缓存模型调用，缓存命中会记录在 `审核运行信息` 分组。
+
+如果代理经常返回 `429 Too Many Requests`，建议先改成更保守的节流配置：
+
+```bash
+V3_AI_CALL_BUDGET=2
+LLM_MAX_QPS=0.5
+LLM_MAX_CALLS_PER_MINUTE=6
+LLM_MAX_RETRIES=3
+LLM_THINKING_ENABLED=false
+```
+
+这会把单任务 AI 调用从最多 3 次降到最多 2 次，并把全局请求速率压到每 2 秒最多 1 次、每分钟最多 6 次，优先保证任务稳定完成。
 
 ## 数据与经验
 
@@ -69,7 +93,7 @@ LLM 接口仍通过 `.env` 中的 `LLM_API_TYPE`、`LLM_API_URL`、`LLM_API_KEY`
 
 人工复审回流规则：
 - 每条 AI 意见独立复审，可标记为保留、已修改、误判剔除或需补资料。
-- 误判和经验补充先提交审批，只有审批通过的记录会被 `build_repair_playbook.py` 纳入经验手册。
+- 误判和经验补充先提交审批，只有审批通过的记录会被自动重建流程纳入经验手册。
 - `REVIEW_USER_NAME` 用于记录提交人/审批人；暂不接入完整账号系统。
 
 生成/刷新经验手册：
@@ -77,6 +101,8 @@ LLM 接口仍通过 `.env` 中的 `LLM_API_TYPE`、`LLM_API_URL`、`LLM_API_KEY`
 ```bash
 PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/build_repair_playbook.py
 ```
+
+也可以直接打开【📚 经验手册维护】页面查看和重建。
 
 清理旧方向无关数据：
 
@@ -93,7 +119,7 @@ auto_review_system/
 ├── agent_worker.py        # 后台 v3 审核 worker
 ├── auditors/              # v3 AI 主审与 LLM 审核提示词
 ├── llm/                   # LLM 客户端、缓存、配置
-├── pages/                 # 上传工作台、审核收发室
+├── pages/                 # 上传工作台、审核收发室、经验手册维护
 ├── parsers/               # Word / Excel / PDF 解析
 ├── rag_engine/            # 队列、历史材料分析工具、可选标准检索基础设施
 ├── scripts/               # playbook、清理、smoke review 等维护脚本
@@ -119,4 +145,5 @@ PYTHONPATH=auto_review_system .venv/bin/python auto_review_system/scripts/run_v3
 - 任务一直不跑：检查 `agent_worker.py` 是否运行，或看 `auto_review_system/logs/agent_worker.log`。
 - AI 输出为空或格式错误：任务会进入 `REVIEW_PENDING`，卷宗中会显示“需复核/需补资料”，可人工复审。
 - 调用次数异常：检查 `V3_AI_CALL_BUDGET=3`、`LLM_CACHE_ENABLED=true`，并查看 `审核运行信息`。
+- 如果频繁出现 `429 Too Many Requests`：降低 `V3_AI_CALL_BUDGET`、`LLM_MAX_QPS`、`LLM_MAX_CALLS_PER_MINUTE`，并暂时关闭 `LLM_THINKING_ENABLED`。
 - 经验手册缺失：运行 `scripts/build_repair_playbook.py`，或确认 `deep_alignment_benchmark_report.md` 仍在本地 analysis 目录。

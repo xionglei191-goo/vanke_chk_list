@@ -5,6 +5,7 @@ All application data paths are anchored to auto_review_system/ so the app keeps
 working no matter where Streamlit, scripts, or the worker are launched from.
 """
 import os
+import re
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(APP_DIR)
@@ -22,6 +23,16 @@ def ensure_runtime_dirs():
 def safe_upload_name(filename):
     """Return a basename-only upload name to avoid accidental path traversal."""
     return os.path.basename(str(filename or "").replace("\\", "/")) or "upload.bin"
+
+
+def safe_artifact_stem(name, max_bytes=120):
+    """Return a filesystem-safe, byte-limited stem for generated artifacts."""
+    stem = safe_upload_name(name).rsplit(".", 1)[0].strip()
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", stem)
+    stem = stem.strip(" ._") or "untitled"
+    while len(stem.encode("utf-8")) > max_bytes and len(stem) > 1:
+        stem = stem[:-1].rstrip(" ._")
+    return stem or "untitled"
 
 
 def app_relative_path(path):

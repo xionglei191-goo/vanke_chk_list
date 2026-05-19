@@ -12,7 +12,7 @@ import requests
 
 from llm.config import (
     API_URL, API_KEY, LLM_MODEL, VISION_MODEL,
-    LLM_API_TYPE, LLM_STREAM, LLM_MAX_CALLS_PER_MINUTE, LLM_SSL_VERIFY,
+    LLM_API_TYPE, LLM_STREAM, LLM_MAX_CALLS_PER_MINUTE, LLM_MAX_QPS, LLM_SSL_VERIFY,
 )
 
 # ==================== QPS 限流 ====================
@@ -21,9 +21,11 @@ _throttle_lock = threading.Lock()
 _call_timestamps = []
 
 
-def throttle_qps(max_qps=2):
+def throttle_qps(max_qps=None):
     """全局 QPS 限流器——兼顾瞬时 QPS 和分钟级配额。"""
     global _call_timestamps
+    if max_qps is None:
+        max_qps = LLM_MAX_QPS
     with _throttle_lock:
         now = time.time()
         _call_timestamps = [t for t in _call_timestamps if now - t < 60.0]
@@ -184,7 +186,7 @@ def _post_anthropic_message(payload, timeout=90):
         except Exception:
             pass
 
-    throttle_qps(2)
+    throttle_qps()
     response = requests.post(
         API_URL,
         headers=headers,
@@ -289,7 +291,7 @@ def post_chat_completion(payload, timeout=90):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {API_KEY}"
     }
-    throttle_qps(2)
+    throttle_qps()
     stream = bool(payload.get("stream"))
     request_timeout = timeout
     if stream:

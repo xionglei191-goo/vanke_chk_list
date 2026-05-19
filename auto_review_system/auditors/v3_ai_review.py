@@ -127,11 +127,44 @@ def _json_from_text(raw_text: str):
     start = min(start_positions)
     end = max(text.rfind("}"), text.rfind("]"))
     if end <= start:
-        return None
+        return _recover_partial_issues_payload(text[start:])
     try:
         return json.loads(text[start:end + 1])
     except Exception:
+        return _recover_partial_issues_payload(text[start:])
+
+
+def _recover_partial_issues_payload(text: str):
+    """Best-effort recovery for truncated `{"issues":[...]}` payloads."""
+    source = str(text or "").strip()
+    if not source:
         return None
+
+    issues_match = re.search(r'"issues"\s*:\s*\[', source)
+    if not issues_match:
+        return None
+
+    decoder = json.JSONDecoder()
+    pos = issues_match.end()
+    issues = []
+    length = len(source)
+
+    while pos < length:
+        while pos < length and source[pos] in " \r\n\t,":
+            pos += 1
+        if pos >= length or source[pos] == "]":
+            break
+        try:
+            item, next_pos = decoder.raw_decode(source, pos)
+        except json.JSONDecodeError:
+            break
+        if isinstance(item, dict):
+            issues.append(item)
+        pos = next_pos
+
+    if issues:
+        return {"issues": issues}
+    return None
 
 
 def _normalize_issue(item: dict, origin: str) -> dict | None:

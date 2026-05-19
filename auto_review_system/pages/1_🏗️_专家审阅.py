@@ -19,8 +19,8 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("1. 上传资料")
     with st.form("upload_form"):
-        uploaded_scheme = st.file_uploader("施工/验收方案（Word / Excel）", type=['docx', 'xlsx'])
-        uploaded_cost = st.file_uploader("配套报价/白单/材料清单（Word / Excel，可选）", type=['docx', 'xlsx'])
+        uploaded_scheme = st.file_uploader("施工/验收方案（Word / Excel / PDF）", type=['docx', 'xlsx', 'pdf'])
+        uploaded_cost = st.file_uploader("配套报价/白单/材料清单（Word / Excel / PDF，可选）", type=['docx', 'xlsx', 'pdf'])
         uploaded_photos = st.file_uploader("现场照片（可选/多图）", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
         submitted_audit = st.form_submit_button("🚀 启动 v3 AI 主审", type="primary")
 

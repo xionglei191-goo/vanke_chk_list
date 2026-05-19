@@ -8,7 +8,7 @@ import streamlit as st
 
 from ui_config import apply_theme
 from utils.exporter import markdown_to_docx
-from utils.paths import RESULTS_DIR, safe_upload_name
+from utils.paths import RESULTS_DIR, safe_artifact_stem
 from rag_engine.queue_manager import (
     delete_task,
     get_all_tasks,
@@ -326,6 +326,8 @@ def _render_review_workspace(task):
 
     stats = review_stats(issues)
     st.markdown(_status_summary(stats), unsafe_allow_html=True)
+    if stats.get("pending", 0):
+        st.warning("还有待复审意见未处理；可先批量补全，再导出最终批文。")
     if runtime:
         with st.expander("审核运行信息", expanded=False):
             for item in runtime:
@@ -339,10 +341,24 @@ def _render_review_workspace(task):
         exportable = [i for i in issues if i.get("status") in {"accepted", "edited", "needs_more_info"}]
         pending = [i for i in issues if i.get("status") == "pending"]
         st.caption(f"可导出 {len(exportable)} 条；待复审 {len(pending)} 条；误判剔除不会进入 Word。")
+        if pending:
+            if st.button("一键将待复审标为保留", use_container_width=True):
+                for item in pending:
+                    save_issue_review(
+                        task["task_id"],
+                        item["issue_id"],
+                        "accepted",
+                        item.get("reviewed_result") or item.get("original_result", ""),
+                    )
+                st.success("已补全全部待复审意见。")
+                st.rerun()
         if st.button("确认并导出 Word", type="primary", use_container_width=True):
+            if pending:
+                st.error("还有待复审意见，先补全再导出。")
+                st.stop()
             md_content = build_review_markdown(task["project_name"], issues)
             os.makedirs(RESULTS_DIR, exist_ok=True)
-            safe_name = safe_upload_name(task["project_name"]).rsplit(".", 1)[0]
+            safe_name = safe_artifact_stem(task["project_name"])
             doc_filename = f"{task['task_id']}_{safe_name}_最终审查批文.docx"
             out_path = os.path.join(RESULTS_DIR, doc_filename)
             buff = markdown_to_docx(md_content, f"{task['project_name']} 审查批文")
@@ -367,7 +383,7 @@ def _render_task_inbox():
     st.markdown("<div class='review-toolbar'>", unsafe_allow_html=True)
     col_status, col_task, col_meta = st.columns([0.25, 0.52, 0.23], gap="medium")
     with col_status:
-        status_filter = st.multiselect("任务状态", TASK_STATUS_OPTIONS, default=["REVIEW_PENDING", "RUNNING", "PENDING"])
+        status_filter = st.multiselect("任务状态", TASK_STATUS_OPTIONS, default=["REVIEW_PENDING", "COMPLETED", "RUNNING", "PENDING"])
     filtered_tasks = [t for t in tasks if not status_filter or t["status"] in status_filter]
     if not filtered_tasks:
         st.warning("当前筛选下没有任务。")
@@ -448,13 +464,18 @@ def _render_approval_queue():
             approve = c1.form_submit_button("审批通过，进入经验候选池", type="primary", use_container_width=True)
             reject = c2.form_submit_button("驳回", use_container_width=True)
             if approve or reject:
-                review_correction(
+                rebuild_result = review_correction(
                     selected["correction_id"],
                     "approved" if approve else "rejected",
                     reviewer=reviewer,
                     review_comment=review_comment.strip(),
                 )
                 st.success("已审批通过。" if approve else "已驳回。")
+                if approve and rebuild_result:
+                    if rebuild_result.get("ok"):
+                        st.caption(f"经验手册已自动重建：{rebuild_result.get('mtime', '')}")
+                    else:
+                        st.warning(f"经验手册重建失败：{rebuild_result.get('error', '未知错误')}")
                 st.rerun()
 
 

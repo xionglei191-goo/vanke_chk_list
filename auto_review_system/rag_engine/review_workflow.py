@@ -357,7 +357,22 @@ def save_correction(
     return correction_id
 
 
-def review_correction(correction_id: str, decision: str, reviewer: str | None = None, review_comment: str = "") -> None:
+def rebuild_review_playbook() -> dict:
+    """Rebuild the runtime playbook with all approved correction lessons."""
+    try:
+        from rag_engine.playbook_manager import rebuild_playbook
+        return rebuild_playbook(approved_feedback=approved_lessons_markdown())
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def review_correction(
+    correction_id: str,
+    decision: str,
+    reviewer: str | None = None,
+    review_comment: str = "",
+    auto_rebuild_playbook: bool = True,
+) -> dict | None:
     if decision not in {"approved", "rejected"}:
         raise ValueError(f"invalid correction decision: {decision}")
     conn = _get_conn()
@@ -371,6 +386,9 @@ def review_correction(correction_id: str, decision: str, reviewer: str | None = 
     )
     conn.commit()
     conn.close()
+    if decision == "approved" and auto_rebuild_playbook:
+        return rebuild_review_playbook()
+    return None
 
 
 def approved_lessons(limit: int = 30) -> list[dict]:
